@@ -16,20 +16,18 @@ int main()
 	//test 
 	init_inode_container(0);
 
-	struct inode *inode = create_inode();
-	sprintf(inode->baseobj.addr.posix_path, "/root/test.txt");
+	struct inode *inode = create_inode("/root/test.txt",01755,0,11,1024);
+	struct inode *inode2 = create_inode("/root/test2.txt",01755,0,12,512);
 
-	struct inode *inode2 = create_inode();
-	sprintf(inode2->baseobj.addr.posix_path, "/root/test2.txt");
 
-	struct inode *getinode = get_inode(0);
+	struct inode *getinode = get_inode(inode->ino);
 
-	printf("%s\n", getinode->baseobj.addr.posix_path);
+	printf("%s mode=%o size=%d,%d\n", getinode->name, getinode->mode, (int)getinode->size, (int)getinode->flayout->length);
 	printf("inode = %ld\n", getinode->ino);
 
-	getinode = get_inode(1);
+	getinode = get_inode(inode2->ino);
 
-	printf("%s\n", getinode->baseobj.addr.posix_path);
+	printf("%s mode=%o size=%d,%d\n", getinode->name, getinode->mode, (int)getinode->size, (int)getinode->flayout->length);
 	printf("inode = %ld\n", getinode->ino);
 
 

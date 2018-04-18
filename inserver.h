@@ -6,19 +6,15 @@
 #include<pthread.h>
 
 
-#define FILE_PATH_SIZE	248
+#define FILE_NAME_SIZE	256
 
 struct object {
-	union {
-		char posix_path[FILE_PATH_SIZE];
-		struct pado_oid { 
-			uint32_t host_id;
-			uint32_t loid;
-		} pado_oid;
-	} addr;
-	enum {POSIX, PADO} type;
-	uint32_t ref_count;
+	uint32_t host_id;	//host address(or id) where the real data is stored, 0 means the POSIX base FS 
+	ino_t loid;			//local inode number of real data in the host or POSIX file, 0 means hole
+//	enum {POSIX, PADO} type;
+	struct extent *refs;
 };
+
 
 struct extent {
 	uint32_t depth;
@@ -34,12 +30,15 @@ struct extent {
 	struct extent *prev;
 	struct extent *next;
 	struct extent **pivotp;
+
+	struct extent *pref_ref;
+	struct extent *next_ref;
 };
 
 typedef unsigned long ino_t;
 
 struct inode {	//type may need to be changed defined in kernel /include/linux/types.h 
-	ino_t ino;	//
+	ino_t ino;	//inode number ino_pado
 	unsigned short mode;	//umode_t
 	unsigned int uid;	//uid_t
 	unsigned int gid;	//gid_t
@@ -48,18 +47,27 @@ struct inode {	//type may need to be changed defined in kernel /include/linux/ty
 	struct timespec mtime;
 	struct timespec ctime;
 	
-	struct object baseobj;
 
 	struct extent *flayout;
+
+	char name[FILE_NAME_SIZE];
+
+	ino_t parent_ino;
+
+	struct object baseobj;
+
+	ino_t shared_ino;
 
 	pthread_rwlock_t rwlock;
 };
 
 
 int init_inode_container(uint32_t);
-struct inode *create_inode(void);
+struct inode *create_inode(const char *,short,ino_t,ino_t,size_t);
 struct inode *get_inode(ino_t);
 
 
 int create_node_pool(size_t);
 
+struct extent *get_extent();
+void release_extent(struct extent *);
