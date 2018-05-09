@@ -5,23 +5,23 @@
 #include<time.h>
 #include<pthread.h>
 
-
 #define FILE_NAME_SIZE	256
 
-struct object {
+struct do_addr {
 	uint32_t host_id;	//host address(or id) where the real data is stored, 0 means the POSIX base FS 
 	ino_t loid;			//local inode number of real data in the host or POSIX file, 0 means hole
-//	enum {POSIX, PADO} type;
-	struct extent *refs;
 };
 
+struct dobject {
+	struct do_addr addr;
+	struct extent *refs;
+};
 
 struct extent {
 	uint32_t depth;
 	enum {CLEARED, VALID, DELETED, FIXED} status;
-	struct object *obj;
+	struct dobject *dobj;
 	size_t start;		//location of this extent in this file 
-	size_t end;
 	size_t offset;		//location of this extent in the source object 
 	size_t length;
 	struct extent *parent;
@@ -31,7 +31,7 @@ struct extent {
 	struct extent *next;
 	struct extent **pivotp;
 
-	struct extent *pref_ref;
+	struct extent *prev_ref;
 	struct extent *next_ref;
 };
 
@@ -46,7 +46,6 @@ struct inode {	//type may need to be changed defined in kernel /include/linux/ty
 	struct timespec atime;
 	struct timespec mtime;
 	struct timespec ctime;
-	
 
 	struct extent *flayout;
 
@@ -54,20 +53,28 @@ struct inode {	//type may need to be changed defined in kernel /include/linux/ty
 
 	ino_t parent_ino;
 
-	struct object baseobj;
+	ino_t base_ino;
+	size_t base_size;
 
 	ino_t shared_ino;
 
 	pthread_rwlock_t rwlock;
 };
 
+void init_inode_container(uint32_t);
 
-int init_inode_container(uint32_t);
-struct inode *create_inode(const char *,short,ino_t,ino_t,size_t);
+struct inode *get_new_inode();
+int release_inode(struct inode *);
+
+struct inode *create_inode(const char *,short,ino_t,ino_t,unsigned int,unsigned int, size_t);
 struct inode *get_inode(ino_t);
 
-
-int create_node_pool(size_t);
-
-struct extent *get_extent();
+struct extent *get_extent(struct dobject *,size_t,size_t,size_t);
 void release_extent(struct extent *);
+
+struct dobject *get_dobject(uint32_t, ino_t);
+int release_dobject(struct dobject *);
+
+void pado_write(struct inode *, struct dobject *, size_t, size_t, size_t);
+
+struct extent *find_start_extent(struct inode *, size_t loc);

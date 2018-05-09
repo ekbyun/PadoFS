@@ -5,7 +5,7 @@ CFLAGS = -Wall -Werror -c
 LIBS = -lpthread -lrt
 INCLUDES = 
 
-SRCS = inserver.c incont.c flayout.c
+SRCS = inserver.c incont.c
 OBJS = $(SRCS:%.c=%.o)
 PROG = inodeserver
 
