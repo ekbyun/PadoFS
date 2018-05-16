@@ -5,7 +5,13 @@
 #include<time.h>
 #include<pthread.h>
 
+#include<assert.h>
+//#defile NDEBUG 
+
 #define FILE_NAME_SIZE	256
+#define	MAX(x,y)	( (x) > (y) ? (x) : (y) )
+#define	MIN(x,y)	( (x) < (y) ? (x) : (y) )
+#define	ABS(x)		( ( (x) < 0 ) ? -(x) : (x) )
 
 struct do_addr {
 	uint32_t host_id;	//host address(or id) where the real data is stored, 0 means the POSIX base FS 
@@ -15,24 +21,28 @@ struct do_addr {
 struct dobject {
 	struct do_addr addr;
 	struct extent *refs;
+	pthread_mutex_t reflock;
 };
 
 struct extent {
-	uint32_t depth;
-	enum {CLEARED, VALID, DELETED, FIXED} status;
 	struct dobject *dobj;
-	size_t start;		//location of this extent in this file 
-	size_t offset;		//location of this extent in the source object 
+	size_t off_f;		//location of this extent in this file 
+	size_t off_do;		//location of this extent in the source object 
 	size_t length;
-	struct extent *parent;
-	struct extent *left;
-	struct extent *right;
-	struct extent *prev;
-	struct extent *next;
-	struct extent **pivotp;
 
 	struct extent *prev_ref;
 	struct extent *next_ref;
+
+	uint32_t depth;
+
+	struct extent *parent;
+	struct extent **pivot;
+
+	struct extent *left;
+	struct extent *right;
+
+	struct extent *prev;
+	struct extent *next;
 };
 
 typedef unsigned long ino_t;
@@ -69,12 +79,28 @@ int release_inode(struct inode *);
 struct inode *create_inode(const char *,short,ino_t,ino_t,unsigned int,unsigned int, size_t);
 struct inode *get_inode(ino_t);
 
-struct extent *get_extent(struct dobject *,size_t,size_t,size_t);
-void release_extent(struct extent *);
+struct extent *create_extent(struct dobject *,size_t,size_t,size_t);
+void release_extent(struct extent *, int);
+void insert_extent_list(struct extent *,struct extent *,struct extent *);
+void replace_extent(struct extent *,struct extent *);
 
 struct dobject *get_dobject(uint32_t, ino_t);
-int release_dobject(struct dobject *);
+int release_dobject(uint32_t, ino_t);
+
+void pado_read(struct inode *,int ,int, size_t, size_t);
 
 void pado_write(struct inode *, struct dobject *, size_t, size_t, size_t);
+void pado_truncate(struct inode *, size_t);
+void pado_clone(struct inode *, int, size_t, size_t);
+#ifdef TEST
+struct extent *pado_clone_tmp(struct inode *, int, size_t, size_t); 
+#endif
+
+void replace(struct inode *, struct extent*, size_t, size_t);
+void remove_extent(struct extent *, int);
 
 struct extent *find_start_extent(struct inode *, size_t loc);
+
+void insert_left(struct extent *,struct extent *);
+
+void rebalance(struct extent *);

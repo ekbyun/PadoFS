@@ -1,6 +1,6 @@
 CC = gcc
 
-CFLAGS = -Wall -Werror -c
+CFLAGS = -Wall -Werror -c -DTEST
 
 LIBS = -lpthread -lrt
 INCLUDES = 
