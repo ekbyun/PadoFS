@@ -113,11 +113,14 @@ struct extent *create_extent(struct dobject *dobj, size_t off_f, size_t off_do, 
 	dobj->refs = newone;
 	pthread_mutex_unlock(&dobj->reflock);
 
+	printf("create_extent depth=%d, do=[%lx,%d,%ld,%ld],off=[%ld,%ld,%ld],ref=[%lx,%lx]\n",newone->depth,(long)newone->dobj,newone->dobj->addr.host_id,newone->dobj->addr.loid,newone->dobj->addr.pado_ino,newone->off_f,newone->off_do,newone->length,(long)newone->prev_ref,(long)newone->next_ref);
 	return newone;
 }
 
 void release_extent(struct extent *target, int unref) 
 {
+	printf("releasing extent %lx, flag=%d, pn=[%lx,%lx]\n",(long)target,unref,(long)target->prev_ref,(long)target->next_ref );
+	struct dobject *dobj = NULL;
 	if( unref ) {
 		pthread_mutex_lock( &target->dobj->reflock );
 		if( target->prev_ref ) {
@@ -128,11 +131,18 @@ void release_extent(struct extent *target, int unref)
 		if( target->next_ref ) {
 			target->next_ref->prev_ref = target->prev_ref;
 		}
+		if( target->dobj->refs == NULL ) {
+			dobj = target->dobj;
+		}
 		pthread_mutex_unlock( &target->dobj->reflock );
 	}
-
 	// need pooling
 	free(target);
+	
+	if( dobj ) {
+		printf(" trigger removing_dobject %lx\n",(long)dobj);
+		remove_dobject( dobj->addr.host_id, dobj->addr.loid ,dobj->addr.pado_ino,0); 
+	}
 }
 void insert_extent_list(struct extent *p, struct extent *t, struct extent *n) 
 {
@@ -165,7 +175,7 @@ void replace_extent(struct extent *orie, struct extent *newe)
 	release_extent(orie, 1);
 }
 
-struct dobject *get_dobject(uint32_t host_id, ino_t loid) 
+struct dobject *get_dobject(uint32_t host_id, ino_t loid, ino_t pino) 
 {
 	struct dobject *res;
 	struct do_hash_item *hi;
@@ -173,50 +183,70 @@ struct dobject *get_dobject(uint32_t host_id, ino_t loid)
 	struct do_addr key;
 	key.host_id = host_id;
 	key.loid = loid;
+	key.pado_ino = pino;
 
 	HASH_FIND(hh, do_map, &key, sizeof(struct do_addr), hi);
 
 	if( hi == NULL ) {
+		printf("Hash not found hid=%d, loid=%ld, pino=%ld\n", key.host_id, key.loid, key.pado_ino);
+
 		res = malloc(sizeof(struct dobject));
 		res->addr.host_id = host_id;
 		res->addr.loid = loid;
+		res->addr.pado_ino = pino;
 		res->refs = NULL;
 		pthread_mutex_init( &res->reflock, NULL);
 
 		hi = malloc(sizeof(struct do_hash_item));
 		hi->key.host_id = host_id;
 		hi->key.loid = loid;
+		hi->key.pado_ino = pino;
 		hi->value = res;
 
-		HASH_ADD(hh, do_map, key, sizeof(struct do_addr), hi);
+		HASH_ADD_KEYPTR(hh, do_map, &key, sizeof(struct do_addr), hi);
 	} else {
+		printf("Hash found!! hid=%d, loid=%ld, pino=%ld\n", key.host_id, key.loid, key.pado_ino);
 		res = hi->value;
 	}
 
 	return res;
 }
 
-int remove_dobject(uint32_t hid, ino_t loid) 
+int remove_dobject(uint32_t hid, ino_t loid, ino_t pino, int force) 
 {
+	printf("removing dobject h=%d l=%ld p=%ld force=%d\n",hid,loid,pino,force);
 	struct do_hash_item *hi;
 
 	struct do_addr key;
 	key.host_id = hid;
 	key.loid = loid;
+	key.pado_ino = pino;
 
     HASH_FIND(hh, do_map, &key, sizeof(struct do_addr), hi);
 
-	if( hi == NULL ) return -3;		
+	if( hi == NULL ) {
+		printf(" there is no such dobject h=%d l=%ld p=%ld\n",hid,loid,pino);
+		return -3;
+	}
 
 	struct dobject *dobj = hi->value;
 	struct extent *ext;
 
 	pthread_mutex_lock( &dobj->reflock );
+	
+	if( force != 1 && dobj->refs) {
+		pthread_mutex_unlock( &dobj->reflock );
+		printf("there is existing extent\n");
+		return -1;
+	}
+
 	while( dobj->refs ) {
+		printf(" removing extent %lx force!!\n",(long)dobj->refs);
 		ext = dobj->refs;
 		dobj->refs = ext->next_ref;
 		remove_extent(ext, 0);
 	}
+	
 	pthread_mutex_unlock( &dobj->reflock );
 
 	pthread_mutex_destroy( &dobj->reflock);
@@ -224,6 +254,8 @@ int remove_dobject(uint32_t hid, ino_t loid)
 
 	HASH_DELETE(hh, do_map, hi);
 	free( hi );
+
+	// TODO : send unlink message to data object server
 
 	return 0;
 }
@@ -236,12 +268,12 @@ void pado_write(struct inode *inode, struct dobject *dobj, size_t off_f, size_t 
 
 	inode->size = MAX( inode->size , off_f + len );
 
-	if( inode->flayout ) {
-		replace(inode, new_ext, off_f, off_f + len);
-	} else {
-		inode->flayout = new_ext;
-		new_ext->pivot = &inode->flayout;
-	}
+//	if( inode->flayout ) {
+		replace(inode, new_ext, new_ext, off_f, off_f + len);
+//	} else {
+//		inode->flayout = new_ext;
+//		new_ext->pivot = &inode->flayout;
+//	}
 
 	pthread_rwlock_unlock(&inode->rwlock);
 }
@@ -253,7 +285,7 @@ void pado_truncate(struct inode *inode, size_t newsize)
 
 	inode->size = newsize;
 	if( newsize < oldsize ) {
-		replace(inode, NULL, newsize, oldsize);
+		replace(inode, NULL, NULL, newsize, oldsize);
 	}
 
 	pthread_rwlock_unlock(&inode->rwlock);
@@ -266,7 +298,7 @@ void pado_clone(struct inode *inode, int fd, size_t start, size_t end)
 		return;
 	}
 #else
-struct extent *pado_clone_tmp(struct inode *inode, int fd, size_t start, size_t end) 
+struct extent *pado_clone_tmp(struct inode *inode, int fd, size_t start, size_t end, struct extent **tailp) 
 {
 #endif 
 	struct extent *alts = NULL, *tail = NULL;
@@ -291,69 +323,93 @@ struct extent *pado_clone_tmp(struct inode *inode, int fd, size_t start, size_t 
 		}
 
 		if( alts == NULL ) {
-			alts = create_extent( get_dobject(hid, loid), off_f, off_do, length);
+			alts = create_extent( get_dobject(hid, loid, inode->ino), off_f, off_do, length);
 			tail = alts;
 		} else {
-			tail->next = create_extent( get_dobject(hid, loid), off_f, off_do, length);
+			tail->next = create_extent( get_dobject(hid, loid, inode->ino), off_f, off_do, length);
 			tail = tail->next;
 		}
 		off_f += length;
 	}
 	assert( off_f <= end );
 	
+	if( tailp ) *tailp = tail;
+
 #ifdef TEST 
 	return alts;
 }
 
 void pado_clone(struct inode *inode, int fd, size_t start, size_t end) 
 {
-	struct extent *alts;
-	alts = pado_clone_tmp(inode, fd, start, end);
+	struct extent *alts, *tail;
+	alts = pado_clone_tmp(inode, fd, start, end, &tail);
 #endif 
 
 	pthread_rwlock_wrlock(&inode->rwlock);
 	inode->size = MAX(inode->size, end);
-	replace(inode, alts, start, end);
+	replace(inode, alts, tail, start, end);
 	pthread_rwlock_unlock(&inode->rwlock);
 }
 
 // this function does not acquire lock. Need to acquire lock at the calling function
-void replace(struct inode *inode, struct extent* alts, size_t start, size_t end) 
+void replace(struct inode *inode, struct extent* alts, struct extent *tail, size_t start, size_t end) 
 {
 	assert( start < end );
+	printf("entered replace ino=%ld, alts=%lx, tail=%lx, start=%ld, end=%ld\n",inode->ino, (long)alts,(long)tail, start,end);
 
 	if( inode->flayout == NULL ) {
+		printf("empty inode\n");
 		if( alts ) {
+			printf("set %lx to the root extent\n",(long)alts);
 			inode->flayout = alts;
 			alts = alts->next;
 			inode->flayout->next = NULL;
 			inode->flayout->pivot = &inode->flayout;
+			start = inode->flayout->off_f + inode->flayout->length;
 		} else {
+			printf("does noting");
 			return;
 		}
 	}
+
+	if( start >= end ) return;
 
 	struct extent *dh = inode->flayout, *tmp;
 	struct extent *tol = NULL, *tor = NULL;
 	
 	size_t Cs,Ce;
 
+	printf("finding first_start_ext\n");
 	// find the first extent greater than of equal ti the start location, with binary search
 	while( dh ) {
 		Cs = dh->off_f;
 		Ce = Cs + dh->length;
+		printf("  cur_dh = %lx, depth=%d, Cs=%ld, Ce=%ld, left=%lx, right=%lx\n",(long)dh,dh->depth,Cs,Ce,(long)dh->left,(long)dh->right);
 		if( Cs == start ) {
+			printf("     Cs = start!! stop loop\n");
 			tor = dh->prev;
 			break;
 		}
 		if( Cs < start && start < Ce ) {
+			printf("     Cs < start < Ce , \n");
 			if( end < Ce ) {
-				tmp = create_extent( dh->dobj, dh->off_f, dh->off_do, start - Cs );
-				tmp->next = alts;
-				alts = tmp;
+				printf("  end < Ce, all replaces are taken place in one existing extent\n");
+				if( alts && dh->dobj == alts->dobj &&
+	    		    dh->off_do + dh->length == alts->off_do && dh->off_f + dh->length == alts->off_f ) {
+					printf("      the first new extent is merged\n");
+					alts->off_f = dh->off_f;
+					alts->off_do = dh->off_do;
+					alts->length += dh->length;
+				} else {
+					printf("      the head part of existing is added to a new extent\n");
+					tmp = create_extent( dh->dobj, dh->off_f, dh->off_do, start - Cs );
+					tmp->next = alts;
+					alts = tmp;
+				}
 				tor = dh->prev;
 				break;
 			} else {
+				printf("   Ce < end, resize the dh extent and dh survive. The next extent of dh is the first_start_ext\n");
 				dh->length = start - Cs;
 				tor = dh;
 				dh = dh->next;
@@ -361,32 +417,51 @@ void replace(struct inode *inode, struct extent* alts, size_t start, size_t end)
 			}
 		}
 		if( start < Cs && dh->left ) {
+			printf("   deep into left\n");
 			dh = dh->left;
 			continue;
 		}
 		if( start < Cs && dh->left == NULL ) {
+			printf("    stop! no more left\n");
 			tor = dh->prev;
 			break;
 		}
 		if( Ce <= start && dh->right ) {
+			printf("   deep into right\n");
 			dh = dh->right;
 			continue;
 		}
 		if( Ce <= start && dh->right == NULL ) {
+			printf("    stop! no more right\n");
 			tor = dh;
 			dh = dh->next;
 			break;
 		}
 	}
+	printf("found first_start_ext=%lx, [%ld,%ld,%ld]\n",(long)dh,dh->off_f,dh->off_do,dh->length);
 
+	struct extent *alte, *dnext;
+
+	// check mergeableility of the first extent in the insert list
+	if( tor && alts && tor->dobj == alts->dobj && 
+	    tor->off_do + tor->length == alts->off_do && tor->off_f + tor->length == alts->off_f ) {
+		printf("   first ext is merged!!\n");
+		tor->length += alts->length;
+		alts = alts->next;
+	}
 
 	// delete or replace existing extents within the range
-	struct extent *alte, *dnext;
 	while( dh ) {
+		assert( dh->off_f + dh->length > start );
+		printf("check to replace or remove extent %lx, C=[%ld,%ld],se=[%ld,%ld]\n",(long)dh,dh->off_f, dh->off_f+dh->length, start,end);
+
+		// chech boundary condition
 		if( end <= dh->off_f ) {
+			printf(" this extent is out of range. it survives.\n");
 			tol = dh;
 			break;
-		} else if( end < dh->off_f + dh->length ) {
+		} else if( end < dh->off_f + dh->length ) {	// boundary extents are overlalled. resize it
+			printf(" this boundary extent is partially overlapped. resize it and not delete\n");
 			size_t diff = end - dh->off_f;
 			dh->off_f += diff;
 			dh->off_do += diff;
@@ -395,6 +470,7 @@ void replace(struct inode *inode, struct extent* alts, size_t start, size_t end)
 			break;
 		}
 
+		printf(" execute !!\n");
 		dnext = dh->next;
 		if( alts ) {
 			alte = alts;
@@ -419,14 +495,12 @@ void replace(struct inode *inode, struct extent* alts, size_t start, size_t end)
 				tor->next->left = alte;
 				alte->parent = tor->next;
 				alte->pivot = &alte->parent->left;
-				rebalance(tor->next);
 			} else {
 				tor->right = alte;
 				alte->parent = tor;
 				alte->pivot = &alte->parent->right;
-				rebalance(tor);
 			}
-			rebalance(alte->parent);
+			tor = alte;
 		} else if ( tol ) {	//insert to left
 			insert_extent_list(tol->prev, alte, tol );
 			if( tol->left ) {
@@ -434,21 +508,30 @@ void replace(struct inode *inode, struct extent* alts, size_t start, size_t end)
 				tol->prev->right = alte;
 				alte->parent = tol->prev;
 				alte->pivot = &alte->parent->right;
-				rebalance(tol->prev);
 			} else {
 				tol->left = alte;
 				alte->parent = tol;
 				alte->pivot = &alte->parent->left;
-				rebalance(tol);
 			}
 		} else {	// both tol and tor are NULL, error
 			assert(0);
+		}
+		rebalance(alte->parent);
+	}
+
+	// check mergeability of the last extent added
+	if( tail && tail->next && tail->dobj == tail->next->dobj ) {
+		if( tail->off_f + tail->length == tail->next->off_f &&
+		    tail->off_do + tail->length == tail->next->off_do ) {
+			tail->length += tail->next->length;
+			remove_extent(tail->next, 1);
 		}
 	}
 }
 
 void remove_extent(struct extent *target, int unref) 
 {
+	printf("removing extent %lx dep=%d, plr=[%lx,%lx,%lx], pn=[%lx,%lx]\n",(long)target,target->depth,(long)target->parent,(long)target->left,(long)target->right,(long)target->prev,(long)target->next );
 	// unlink target from prev-next list 
 	if( target->prev ) {
 		target->prev->next = target->next;
@@ -460,15 +543,23 @@ void remove_extent(struct extent *target, int unref)
 	struct extent *alte = NULL, *rebe = NULL, *tmp;
 
 	if( target->left && target->right ) {
+		printf(" it has both left and right children. take prev one as another victim\n");
 		alte = target->prev;
 		assert( alte->right == NULL );
-		rebe = alte->parent;
-		tmp = target->prev->left;
+
+		tmp = alte->left;
+		*(alte->pivot) = tmp;
 		if( tmp ) {
-			*(alte->pivot) = tmp;
-			tmp->parent = rebe;
+			printf(" the prev one is not a leaf having left child.\n");
+			tmp->parent = alte->parent;
 			tmp->pivot = alte->pivot;
 		}
+
+		rebe = alte->parent;
+		if( rebe == target ) {
+			rebe = alte;	
+		}
+
 		*(target->pivot) = alte;
 		alte->pivot = target->pivot;
 		alte->parent = target->parent;
@@ -476,18 +567,26 @@ void remove_extent(struct extent *target, int unref)
 		alte->right = target->right;
 		alte->depth = target->depth;
 
-		alte->right->pivot = &alte->right;
+		alte->left->parent = alte;
 		alte->left->pivot = &alte->left;
+		alte->right->parent = alte;
+		alte->right->pivot = &alte->right;
+
 	} else {
 		if( target->left && target->right == NULL ) {
+			printf(" it has only left child, pull it up\n");
 			alte = target->left;
 		} else if ( target->left == NULL && target->right ) {
+			printf(" it has only right child, pull it up\n");
 			alte = target->right;
+		} else {
+			printf(" it is a leaf!!!!\n");
 		}
 		if (alte) {
+			printf("  it is not a leaf\n");
 			alte->parent = target->parent;
 			alte->pivot = target->pivot;
-		}
+		} 
 		*(target->pivot) = alte;	//alte is NULL in default
 		rebe = target->parent;
 	}
@@ -529,6 +628,7 @@ struct extent *find_start_extent(struct inode *inode,size_t start){
 
 // flag = 1 mean include base_ino. 0 means exclude base_ino
 void pado_read(struct inode *inode, int fd, int flag, size_t start, size_t end) {
+	pthread_rwlock_rdlock(&inode->rwlock);
 	struct extent *cur = find_start_extent(inode, start);
 
 	uint32_t hid;
@@ -586,6 +686,8 @@ void pado_read(struct inode *inode, int fd, int flag, size_t start, size_t end) 
 	loid = 0;
 	write(fd, &hid, sizeof(uint32_t));
 	write(fd, &loid, sizeof(ino_t));
+
+	pthread_rwlock_unlock(&inode->rwlock);
 }
 
 void rebalance(struct extent *ext) {

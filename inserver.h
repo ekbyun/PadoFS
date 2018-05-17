@@ -16,6 +16,7 @@
 struct do_addr {
 	uint32_t host_id;	//host address(or id) where the real data is stored, 0 means the POSIX base FS 
 	ino_t loid;			//local inode number of real data in the host or POSIX file, 0 means hole
+	ino_t pado_ino;
 };
 
 struct dobject {
@@ -84,19 +85,19 @@ void release_extent(struct extent *, int);
 void insert_extent_list(struct extent *,struct extent *,struct extent *);
 void replace_extent(struct extent *,struct extent *);
 
-struct dobject *get_dobject(uint32_t, ino_t);
-int release_dobject(uint32_t, ino_t);
-
-void pado_read(struct inode *,int ,int, size_t, size_t);
+struct dobject *get_dobject(uint32_t, ino_t, ino_t);
+int remove_dobject(uint32_t, ino_t, ino_t, int);
 
 void pado_write(struct inode *, struct dobject *, size_t, size_t, size_t);
 void pado_truncate(struct inode *, size_t);
 void pado_clone(struct inode *, int, size_t, size_t);
 #ifdef TEST
-struct extent *pado_clone_tmp(struct inode *, int, size_t, size_t); 
+struct extent *pado_clone_tmp(struct inode *, int, size_t, size_t, struct extent **); 
 #endif
 
-void replace(struct inode *, struct extent*, size_t, size_t);
+void pado_read(struct inode *,int ,int, size_t, size_t);
+
+void replace(struct inode *, struct extent*, struct extent *,size_t, size_t);
 void remove_extent(struct extent *, int);
 
 struct extent *find_start_extent(struct inode *, size_t loc);
