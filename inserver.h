@@ -4,6 +4,7 @@
 #include<unistd.h>
 #include<time.h>
 #include<pthread.h>
+#include"uthash.h"
 
 #include<assert.h>
 //#defile NDEBUG 
@@ -12,6 +13,8 @@
 #define	MAX(x,y)	( (x) > (y) ? (x) : (y) )
 #define	MIN(x,y)	( (x) < (y) ? (x) : (y) )
 #define	ABS(x)		( ( (x) < 0 ) ? -(x) : (x) )
+
+#define DEPTH(x)    ( (x) ? (x->depth) : 0 )
 
 struct do_addr {
 	uint32_t host_id;	//host address(or id) where the real data is stored, 0 means the POSIX base FS 
@@ -23,6 +26,7 @@ struct dobject {
 	struct do_addr addr;
 	struct extent *refs;
 	pthread_mutex_t reflock;
+	UT_hash_handle hh;
 };
 
 struct extent {
@@ -34,7 +38,7 @@ struct extent {
 	struct extent *prev_ref;
 	struct extent *next_ref;
 
-	uint32_t depth;
+	int depth;
 
 	struct extent *parent;
 	struct extent **pivot;
@@ -86,7 +90,7 @@ void insert_extent_list(struct extent *,struct extent *,struct extent *);
 void replace_extent(struct extent *,struct extent *);
 
 struct dobject *get_dobject(uint32_t, ino_t, ino_t);
-int remove_dobject(uint32_t, ino_t, ino_t, int);
+int remove_dobject(struct dobject *, int);
 
 void pado_write(struct inode *, struct dobject *, size_t, size_t, size_t);
 void pado_truncate(struct inode *, size_t);

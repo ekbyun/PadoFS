@@ -37,7 +37,7 @@ int main(int argc, char **argv)
 	size_t start, end;
 	int fd;
 
-	printf("----------------------------------------------\n");
+	printf("----------------------------------------------------------------------------------------------------------------------------\n");
 	while(1) {
 	//	printf("Insert command:");
 		scanf("%c %d %ld %ld %ld",&com, &hid, &loid, &start, &end);
@@ -81,16 +81,15 @@ int main(int argc, char **argv)
 }
 
 void print_extent(struct extent *ext) {
-	int i = 0;
 	size_t prev_end = 0;
+	struct extent *h;
 	printf("-  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -\n");
 	while( ext ) {
-		for(i=0;i<ext->depth-1;i++) {
+		for(h = ext ; h->parent ; h = h->parent ) {
 			printf("                 ");
 		}
-		if( prev_end > ext->off_f) {
-			printf("ERROR !!!!!! \n");
-		}
+		assert( ABS( DEPTH( ext->left ) - DEPTH( ext->right ) ) < 2 );
+		assert( prev_end <= ext->off_f );
 		prev_end = ext->off_f + ext->length;
 		printf("%lx,%-8ld,%-8ld[%d,%ld,%ld,%ld][%lx,%lx,%lx][%lx,%lx]\n",(long)ext,ext->off_f,prev_end,ext->dobj->addr.host_id,ext->dobj->addr.loid,ext->dobj->addr.pado_ino,ext->off_do,(long)ext->parent,(long)ext->left,(long)ext->right,(long)ext->prev,(long)ext->next);
 		ext = ext->next;
