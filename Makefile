@@ -1,6 +1,6 @@
 CC = gcc
 
-CFLAGS = -Wall -Werror -c -DTEST
+CFLAGS = -Wall -Werror -c -DTEST -DNODP
 
 LIBS = -lpthread -lrt
 INCLUDES = 
@@ -8,6 +8,7 @@ INCLUDES =
 SRCS = inserver.c incont.c
 OBJS = $(SRCS:%.c=%.o)
 PROG = inodeserver
+TEST = test
 
 .SUFFIXES:.c .o
 
@@ -17,13 +18,16 @@ PROG = inodeserver
 .PHONY: all clean dep distclean
 
 
-all:$(PROG)
+all:$(PROG) $(TEST)
 
 $(PROG): $(OBJS)
 	$(CC) $(INCLUDES) $(LIBS) -o $@ $^
 
+$(TEST): incont.o test.o
+	$(CC) $(INCLIDES) $(LIBS) -o $@ $^
+
 clean:
-	rm -f $(PROG) $(OBJS)
+	rm -f $(PROG) $(OBJS) $(TEST)
 
 dep:
 	gcc -M $(INCLUDES) $(SRCS) >.depend

@@ -7,7 +7,14 @@
 #include"uthash.h"
 
 #include<assert.h>
-//#defile NDEBUG 
+
+#ifndef NODP
+#define dp(fmt,args...) printf( fmt, ## args )
+#define dlp(fmt,args...) printf( "[%s %d]" fmt, __FILE__,__LINE__, ## args )
+#else
+#define dp(fmt,args...)
+#define dlp(fmt,args...)
+#endif
 
 #define FILE_NAME_SIZE	256
 #define	MAX(x,y)	( (x) > (y) ? (x) : (y) )
@@ -94,6 +101,7 @@ int remove_dobject(struct dobject *, int);
 
 void pado_write(struct inode *, struct dobject *, size_t, size_t, size_t);
 void pado_truncate(struct inode *, size_t);
+void pado_del_range(struct inode *, size_t, size_t);
 void pado_clone(struct inode *, int, size_t, size_t);
 #ifdef TEST
 struct extent *pado_clone_tmp(struct inode *, int, size_t, size_t, struct extent **); 
@@ -109,3 +117,5 @@ struct extent *find_start_extent(struct inode *, size_t loc);
 void insert_left(struct extent *,struct extent *);
 
 void rebalance(struct extent *);
+
+void check_extent(struct extent *,int, int);
