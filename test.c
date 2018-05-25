@@ -12,9 +12,9 @@ void check_bst(struct extent *, size_t *, size_t *);
 
 int main(int argc, char **argv) 
 {
-//	dp("sizeof inode = %ld\n", sizeof(struct inode) );
-//	dp("sizeof extent = %ld\n", sizeof(struct extent) );
-//	dp("sizeof object = %ld\n", sizeof(struct dobject) );
+	dp("sizeof inode = %ld\n", sizeof(struct inode) );
+	dp("sizeof extent = %ld\n", sizeof(struct extent) );
+	dp("sizeof object = %ld\n", sizeof(struct dobject) );
 
 	//test 
 	
@@ -72,7 +72,7 @@ int main(int argc, char **argv)
 					break;
 				}
 				dp("writing do(hid=%d,loid=%ld) to offset= %ld, length= %ld ...\n",hid, loid,start, end-start); 
-				dobj= get_dobject(hid, loid, 1);
+				dobj= get_dobject(hid, loid, inode);
 				pado_write(inode, dobj, start, start, end-start);
 				print_extent( find_start_extent(inode, 0) , 0);			
 				check_bst(inode->flayout, &max, &min); 
@@ -137,7 +137,7 @@ void print_extent(struct extent *ext, int clone) {
 		for(h = ext ; h->parent ; h = h->parent ) {
 			dp("                 ");
 		}
-		dp("%lx,%-8ld,%-8ld[%d,%ld,%ld,%ld][%d,%lx,%lx,%lx][%lx,%lx]\n",(long)ext,ext->off_f,ext->off_f+ext->length,ext->dobj->addr.host_id,ext->dobj->addr.loid,ext->dobj->addr.pado_ino,ext->off_do,ext->depth,(long)ext->parent,(long)ext->left,(long)ext->right,(long)ext->prev,(long)ext->next);
+		dp("%lx,%-8ld,%-8ld[%d,%ld,%ld,%ld][%d,%lx,%lx,%lx][%lx,%lx]\n",(long)ext,ext->off_f,ext->off_f+ext->length,ext->dobj->addr.host_id,ext->dobj->addr.loid,ext->dobj->inode->ino,ext->off_do,ext->depth,(long)ext->parent,(long)ext->left,(long)ext->right,(long)ext->prev,(long)ext->next);
 
 		if( clone != 1 ) {
 			check_extent(ext,0,0);

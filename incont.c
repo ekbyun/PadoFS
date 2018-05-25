@@ -13,8 +13,6 @@ struct inode_hash_item {
 struct inode_hash_item *inode_map = NULL;
 pthread_rwlock_t imlock = PTHREAD_RWLOCK_INITIALIZER;
 
-struct dobject *do_map = NULL;
-pthread_rwlock_t dmlock = PTHREAD_RWLOCK_INITIALIZER;
 
 void init_inode_container(uint32_t nodeid) {
 	inodebase = ((ino_t)nodeid <<32) + 1;
@@ -27,6 +25,7 @@ struct inode *get_new_inode() {
 int release_inode(struct inode *inode) {
     if( inode->flayout == NULL ) {
 		pthread_rwlock_destroy(&inode->rwlock);
+		pthread_rwlock_destroy(&inode->dmlock);
 		free(inode);
 		return 1;
 	} else {
@@ -62,6 +61,8 @@ struct inode *create_inode(const char *name, short mode, ino_t pino, ino_t bino,
 	
 	new_inode->size = size;
 
+	new_inode->do_map = NULL;
+	pthread_rwlock_init(&new_inode->dmlock, NULL);
 	pthread_rwlock_init(&new_inode->rwlock, NULL);
 
 	new_inode->flayout = NULL;	
@@ -109,7 +110,7 @@ struct extent *create_extent(struct dobject *dobj, size_t off_f, size_t off_do, 
 	dobj->refs = newone;
 	pthread_mutex_unlock(&dobj->reflock);
 
-	dp("a new extent(%lx) is created. depth=%d, do=[%lx,%d,%ld,%ld],off=[%ld,%ld,%ld],ref=[%lx,%lx]\n",(long)newone,newone->depth,(long)newone->dobj,newone->dobj->addr.host_id,newone->dobj->addr.loid,newone->dobj->addr.pado_ino,newone->off_f,newone->off_do,newone->length,(long)newone->prev_ref,(long)newone->next_ref);
+	dp("a new extent(%lx) is created. depth=%d, do=[%lx,%d,%ld,%ld],off=[%ld,%ld,%ld],ref=[%lx,%lx]\n",(long)newone,newone->depth,(long)newone->dobj,newone->dobj->addr.host_id,newone->dobj->addr.loid,newone->dobj->inode->ino,newone->off_f,newone->off_do,newone->length,(long)newone->prev_ref,(long)newone->next_ref);
 	return newone;
 }
 
@@ -180,7 +181,7 @@ void replace_extent(struct extent *orie, struct extent *newe)
 	check_extent(newe,1,1);
 }
 
-struct dobject *get_dobject(uint32_t host_id, ino_t loid, ino_t pino) 
+struct dobject *get_dobject(uint32_t host_id, ino_t loid, struct inode *inode) 
 {
 	struct dobject *res, *hi;
 
@@ -189,23 +190,24 @@ struct dobject *get_dobject(uint32_t host_id, ino_t loid, ino_t pino)
 	memset(res,0x00,sizeof(struct dobject));
 	res->addr.host_id = host_id;
 	res->addr.loid = loid;
-	res->addr.pado_ino = pino;
 
-	pthread_rwlock_wrlock(&dmlock);
-	HASH_FIND(hh, do_map, &res->addr, sizeof(struct do_addr), hi);
+	pthread_rwlock_wrlock(&inode->dmlock);
+	HASH_FIND(hh, inode->do_map, &res->addr, sizeof(struct do_addr), hi);
 
 	if( hi == NULL ) {
-		dp("Hash not found hid=%d, loid=%ld, pino=%ld\n", host_id, loid, pino);
+		dp("Hash not found hid=%d, loid=%ld, pino=%ld\n", host_id, loid, inode->ino);
+
+		res->inode = inode;
 
 		res->refs = NULL;
 		pthread_mutex_init( &res->reflock, NULL);
 
 		dp(" add new dobject %lx into hashtable\n",(long)res);
-		HASH_ADD_KEYPTR(hh, do_map, &res->addr, sizeof(struct do_addr), res);
-		pthread_rwlock_unlock(&dmlock);
+		HASH_ADD_KEYPTR(hh, inode->do_map, &res->addr, sizeof(struct do_addr), res);
+		pthread_rwlock_unlock(&inode->dmlock);
 	} else {
-		pthread_rwlock_unlock(&dmlock);
-		dp("Hash found!! %lx, hid=%d, loid=%ld, pino=%ld\n", (long)hi, host_id, loid, pino);
+		pthread_rwlock_unlock(&inode->dmlock);
+		dp("Hash found!! %lx, hid=%d, loid=%ld, pino=%ld\n", (long)hi, host_id, loid, inode->ino);
 		free(res);
 		res = hi;
 	}
@@ -215,11 +217,11 @@ struct dobject *get_dobject(uint32_t host_id, ino_t loid, ino_t pino)
 
 int remove_dobject(struct dobject *dobj, int force) 
 {
-	dp("removing dobject %lx, h=%d l=%ld p=%ld force=%d\n",(long)dobj,dobj->addr.host_id,dobj->addr.loid,dobj->addr.pado_ino,force);
+	dp("removing dobject %lx, h=%d l=%ld p=%ld force=%d\n",(long)dobj,dobj->addr.host_id,dobj->addr.loid,dobj->inode->ino,force);
 
 #ifndef NDEBUG
 	struct dobject *hi;
-    HASH_FIND(hh, do_map, &dobj->addr, sizeof(struct do_addr), hi);
+    HASH_FIND(hh, dobj->inode->do_map, &dobj->addr, sizeof(struct do_addr), hi);
 	if( hi == NULL ) {
 		dp(" there is no such dobject\n");
 		return -3;
@@ -248,10 +250,10 @@ int remove_dobject(struct dobject *dobj, int force)
 
 	pthread_mutex_destroy( &dobj->reflock);
 
-	pthread_rwlock_wrlock(&dmlock);
+	pthread_rwlock_wrlock(&dobj->inode->dmlock);
 	dp("HASH_DELETE dobj=%lx\n",(long)dobj);
-	HASH_DELETE(hh, do_map, dobj);
-	pthread_rwlock_unlock(&dmlock);
+	HASH_DELETE(hh, dobj->inode->do_map, dobj);
+	pthread_rwlock_unlock(&dobj->inode->dmlock);
 
 	free( dobj );
 
@@ -342,10 +344,10 @@ struct extent *pado_clone_tmp(struct inode *tinode, int fd, size_t start, size_t
 		}
 
 		if( alts == NULL ) {
-			alts = create_extent( get_dobject(hid, loid, tinode->ino), off_f, off_do, length);
+			alts = create_extent( get_dobject(hid, loid, tinode), off_f, off_do, length);
 			tail = alts;
 		} else {
-			tail->next = create_extent( get_dobject(hid, loid, tinode->ino), off_f, off_do, length);
+			tail->next = create_extent( get_dobject(hid, loid, tinode), off_f, off_do, length);
 			tail = tail->next;
 		}
 		off_f += length;
@@ -828,7 +830,7 @@ void rebalance(struct extent *ext) {
 
 void check_extent(struct extent *ext, int p, int dur_rep)
 {
-	if(p) dp("[check_extent]%lx,%-8ld,%-8ld[%d,%ld,%ld,%ld][%d,%lx,%lx,%lx][%lx,%lx]\n",(long)ext,ext->off_f,ext->off_f+ext->length,ext->dobj->addr.host_id,ext->dobj->addr.loid,ext->dobj->addr.pado_ino,ext->off_do,ext->depth,(long)ext->parent,(long)ext->left,(long)ext->right,(long)ext->prev,(long)ext->next);
+	if(p) dp("[check_extent]%lx,%-8ld,%-8ld[%d,%ld,%ld,%ld][%d,%lx,%lx,%lx][%lx,%lx]\n",(long)ext,ext->off_f,ext->off_f+ext->length,ext->dobj->addr.host_id,ext->dobj->addr.loid,ext->dobj->inode->ino,ext->off_do,ext->depth,(long)ext->parent,(long)ext->left,(long)ext->right,(long)ext->prev,(long)ext->next);
 
 	assert( ext->length > 0 );
 	if( ext->prev_ref ) assert( ext->prev_ref->next_ref == ext );

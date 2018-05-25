@@ -27,7 +27,7 @@ $(TEST): incont.o test.o
 	$(CC) $(INCLIDES) $(LIBS) -o $@ $^
 
 clean:
-	rm -f $(PROG) $(OBJS) $(TEST)
+	rm -f $(PROG) *.o $(TEST)
 
 dep:
 	gcc -M $(INCLUDES) $(SRCS) >.depend

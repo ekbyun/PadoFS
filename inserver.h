@@ -26,12 +26,12 @@
 struct do_addr {
 	uint32_t host_id;	//host address(or id) where the real data is stored, 0 means the POSIX base FS 
 	ino_t loid;			//local inode number of real data in the host or POSIX file, 0 means hole
-	ino_t pado_ino;
 };
 
 struct dobject {
 	struct do_addr addr;
 	struct extent *refs;
+	struct inode *inode;
 	pthread_mutex_t reflock;
 	UT_hash_handle hh;
 };
@@ -80,6 +80,9 @@ struct inode {	//type may need to be changed defined in kernel /include/linux/ty
 
 	ino_t shared_ino;
 
+	struct dobject *do_map;
+	pthread_rwlock_t dmlock;
+
 	pthread_rwlock_t rwlock;
 };
 
@@ -96,7 +99,7 @@ void release_extent(struct extent *, int);
 void insert_extent_list(struct extent *,struct extent *,struct extent *);
 void replace_extent(struct extent *,struct extent *);
 
-struct dobject *get_dobject(uint32_t, ino_t, ino_t);
+struct dobject *get_dobject(uint32_t, ino_t, struct inode *);
 int remove_dobject(struct dobject *, int);
 
 void pado_write(struct inode *, struct dobject *, size_t, size_t, size_t);
