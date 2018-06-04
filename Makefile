@@ -1,14 +1,18 @@
 CC = gcc
 
-CFLAGS = -Wall -Werror -c -DTEST -DNODP
+CFLAGS = -Wall -Werror -c -DTEST
 
 LIBS = -lpthread -lrt
 INCLUDES = 
 
-SRCS = inserver.c incont.c
-OBJS = $(SRCS:%.c=%.o)
-PROG = inodeserver
+INOS_SRCS = inserver.c incont.c
+INOS_OBJS = $(INOS_SRCS:%.c=%.o)
+INOS_PROG = inodeserver
+
 TEST = test
+CONV = convser
+
+PROGS = $(INOS_PROG) $(TEST) $(CONV)
 
 .SUFFIXES:.c .o
 
@@ -18,16 +22,19 @@ TEST = test
 .PHONY: all clean dep distclean
 
 
-all:$(PROG) $(TEST)
+all:$(PROGS)
 
-$(PROG): $(OBJS)
+$(INOS_PROG): $(INOS_OBJS)
 	$(CC) $(INCLUDES) $(LIBS) -o $@ $^
 
 $(TEST): incont.o test.o
-	$(CC) $(INCLIDES) $(LIBS) -o $@ $^
+	$(CC) $(INCLUDES) $(LIBS) -o $@ $^
+
+$(CONV): convser.o
+	$(CC) $(INCLUDES) $(LIBS) -o $@ $^
 
 clean:
-	rm -f $(PROG) *.o $(TEST)
+	rm -f $(PROGS) *.o
 
 dep:
 	gcc -M $(INCLUDES) $(SRCS) >.depend
