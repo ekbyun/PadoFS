@@ -15,8 +15,8 @@
 #define dp(fmt,args...)
 #endif
 
-#define BACKUP_FILE_PATH	"/etc/convser_backup.bin"
-#define DEFAULT_PORT		7169
+#define BACKUP_FILE_PATH	"/tmp/convser_backup.bin"
+#define DEFAULT_PORT		7183
 
 struct hitem {
 	ino_t key;
@@ -26,44 +26,6 @@ struct hitem {
 
 struct hitem *map = NULL;
 
-void handle(const char com, int fd) {
-	ino_t lino, pino;
-	struct hitem *hi = NULL;
-	switch(com)
-	{
-		case 'G':
-			if( read(fd, &lino, sizeof(ino_t) == 0 ) ) {
-				dp("EOF before receive Luster inode number\n");
-				pino = 0;
-			} else {
-				hi = NULL;
-				HASH_FIND(hh, map, &lino, sizeof(ino_t), hi);
-				pino = (hi) ? hi->value : 0;
-			}
-			write(fd, &pino, sizeof(ino_t));
-			break;
-		case 'P':
-			if( read(fd, &lino, sizeof(ino_t) ) == 0 || read(fd, &pino, sizeof(ino_t) ) == 0  ) {
-				dp("EOF before receive inode numbers\n");
-				break;
-			}
-
-			hi = NULL;
-			HASH_FIND(hh, map, &lino, sizeof(ino_t), hi);
-			if( hi ) {
-				hi->value = pino;
-			} else {
-				hi = calloc( sizeof(struct hitem), 1);
-	
-				hi->key = lino;
-				hi->value = pino;
-				HASH_ADD(hh, map, key, sizeof(ino_t), hi);
-			}
-			break;
-	}
-	close(fd);
-}
-
 void usage() {
 	printf("USAGE: convser [OPTION]... &\n");
 	printf("  options : \n");
@@ -72,20 +34,46 @@ void usage() {
 	printf("                      If not set, start with an emtpy map\n");
 	printf("      -b [filepath] : filename with path to which mapping contents will be backuped when stopped.\n");
 	printf("                      default = " BACKUP_FILE_PATH "\n");
+	printf("      -n            : contents will not be backed up when stopped\n");
 	printf("      -h            : print this message\n");
 	exit(1);
 }
 
-char outfilename[1014] = BACKUP_FILE_PATH;
+void do_backup(const char *outfilename) {
+	int fd;
+	struct hitem *cur, *tmp;
+	ino_t lino, pino;
+
+	fd = open(outfilename,O_WRONLY | O_CREAT | O_TRUNC);
+	if( fd < 0 ) {
+		perror("opening backup file:");
+		return;
+	}
+
+	printf("Backing up mapping to the file %s...",outfilename);
+	HASH_ITER(hh, map, cur, tmp) {
+		lino = cur->key;
+		pino = cur->value;
+		write(fd, &lino, sizeof(ino_t));
+		write(fd, &pino, sizeof(ino_t));
+		HASH_DEL(map, cur);
+		free(cur);
+	}
+	close(fd);
+	printf("Done\n");
+}
+
 
 int main(int argc, char **argv) 
 {
 	int c;
 	uint16_t port = DEFAULT_PORT;
+	char outfilename[1014] = BACKUP_FILE_PATH;
 	char infilename[1024] = {0};
 	int infileexist = 0;
+	int backup_flag = 1;
 
-	while( (c = getopt(argc, argv, "p:f:b:h" ))!= -1) {
+	while( (c = getopt(argc, argv, "p:f:b:hn" ))!= -1) {
 		switch(c) {
 			case 'p':
 				port = atoi(optarg);
@@ -102,16 +90,19 @@ int main(int argc, char **argv)
 				break;
 			case 'h':
 				usage();
+			case 'n':
+				backup_flag = 0;	
 		}
 	}
 
-	printf("Initializing inode number converter server.....\n  The mapping table will be backed up to %s when this server stops\n",outfilename);
+	printf("Initializing inode number converter server.....\n");
+	if( backup_flag ) printf("The mapping table will be backed up to %s when this server stops\n",outfilename);
 
 	int fd;
 	ino_t lino, pino;
 	struct hitem *hi;
 	if( infileexist ) {
-		printf("Restore mapping from the file %s\n",infilename);
+		printf("Restoring mapping from the file %s\n",infilename);
 		//restore hash map from file 
 		fd = open( infilename, O_RDONLY );
 		
@@ -181,8 +172,6 @@ int main(int argc, char **argv)
 			continue;
 		}
 		dp("com = %c\n",com);
-		lino = 0;
-		pino = 0;
 
 		switch(com) {		
 		case 'G':
@@ -219,7 +208,12 @@ int main(int argc, char **argv)
 			break;
 		}
 		close(fd);
+		if(com == 'Q') break;
 	}
+	close(sockfd);
+
+	if( backup_flag )
+		do_backup(outfilename);
 
 	return 0;
 }

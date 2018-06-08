@@ -1,49 +1,27 @@
 CC = gcc
+MAKE = make
 
-CFLAGS = -Wall -Werror -c -DTEST
+MODULE_DIR := $(PWD)/module
+SERVERS_DIR := $(PWD)
 
-LIBS = -lpthread -lrt
-INCLUDES = 
+BUILD_DIR := $(PWD)
 
-INOS_SRCS = inserver.c incont.c
-INOS_OBJS = $(INOS_SRCS:%.c=%.o)
-INOS_PROG = inodeserver
+.PHONY: all servers module clean dep distclean
 
-TEST = test
-CONV = convser
+all:servers module
 
-PROGS = $(INOS_PROG) $(TEST) $(CONV)
+servers:
+	$(MAKE) -C $(SERVERS_DIR) -f Makefile.servers all
 
-.SUFFIXES:.c .o
-
-.c.o:
-	$(CC) -c $(CFLAGS) $(INCLUDES) $< -o $@
-
-.PHONY: all clean dep distclean
-
-
-all:$(PROGS)
-
-$(INOS_PROG): $(INOS_OBJS)
-	$(CC) $(INCLUDES) $(LIBS) -o $@ $^
-
-$(TEST): incont.o test.o
-	$(CC) $(INCLUDES) $(LIBS) -o $@ $^
-
-$(CONV): convser.o
-	$(CC) $(INCLUDES) $(LIBS) -o $@ $^
+module:
+	$(MAKE) -C $(MODULE_DIR) all
 
 clean:
-	rm -f $(PROGS) *.o
+	$(MAKE) -C $(SERVERS_DIR) -f Makefile.servers clean
+	$(MAKE) -C $(MODULE_DIR) clean
 
 dep:
-	gcc -M $(INCLUDES) $(SRCS) >.depend
+	$(MAKE) -C $(SERVERS_DIR) -f Makefile.servers dep
 
 distclean: clean
 	rm -rf .depend
-
-$(OBJS): inserver.h Makefile
-
-ifeq (.depend,$(wildcard .depend))
-include .depend
-endif

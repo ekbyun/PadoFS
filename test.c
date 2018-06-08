@@ -1,4 +1,4 @@
-#include"inserver.h"
+#include"incont.h"
 #include<sys/types.h>
 #include<sys/stat.h>
 #include <fcntl.h>
@@ -7,7 +7,7 @@
 
 #define	FIFOFILE	"/tmp/pado_test_fifo"
 
-void print_extent(struct extent *, int);
+void print_extent(struct extent *, int, uint32_t);
 void check_bst(struct extent *, size_t *, size_t *);
 
 int main(int argc, char **argv) 
@@ -18,10 +18,10 @@ int main(int argc, char **argv)
 
 	//test 
 	
-	init_inode_container(0);
+	init_inode_container(0,0);
 
-	struct inode *inode = create_inode("test.txt",01755,0,11,20,21,1024);
-	struct inode *inode2 = create_inode("test2.txt",01755,0,12,20,21,512);
+	struct inode *inode = create_inode("test.txt",0,01755,0,11,20,21,1024);
+	struct inode *inode2 = create_inode("test2.txt",0,01755,0,12,20,21,512);
 
 	struct inode *getinode = get_inode(inode->ino);
 	inode = getinode;
@@ -74,7 +74,7 @@ int main(int argc, char **argv)
 				dp("writing do(hid=%d,loid=%ld) to offset= %ld, length= %ld ...\n",hid, loid,start, end-start); 
 				dobj= get_dobject(hid, loid, inode);
 				pado_write(inode, dobj, start, start, end-start);
-				print_extent( find_start_extent(inode, 0) , 0);			
+				print_extent( find_start_extent(inode, 0) , 0, inode->num_exts);			
 				check_bst(inode->flayout, &max, &min); 
 				if( inode->flayout) assert(inode->size >= max);
 				dp("CHECK_BST SUCCESS min= %ld, max= %ld, size= %ld\n",min,max,inode->size);
@@ -85,7 +85,7 @@ int main(int argc, char **argv)
 				mkfifo(FIFOFILE, 0666);
 				fd = open(FIFOFILE, O_RDWR);
 				pado_read(inode, fd, 1, start, end);
-				print_extent( pado_clone_tmp(inode2, fd, start, end, NULL) , 1);
+				print_extent( pado_clone_tmp(inode2, fd, start, end, NULL) , 1, 0);
 				close(fd);
 				remove(FIFOFILE);
 				dp("----------------------------------------------\n");
@@ -98,7 +98,7 @@ int main(int argc, char **argv)
 				pado_clone(inode2, fd, loid, loid+(end-start));
 				close(fd);
 				remove(FIFOFILE);
-				print_extent( find_start_extent(inode2, 0) , 0);			
+				print_extent( find_start_extent(inode2, 0) , 0, inode2->num_exts);			
 				check_bst(inode2->flayout, &max, &min);
 				if( inode2->flayout) assert(inode2->size >= max);
 				dp("CHECK_BST SUCCESS min= %ld, max= %ld, size1= %ld size2= %ld\n",min,max,inode->size, inode2->size);
@@ -108,10 +108,10 @@ int main(int argc, char **argv)
 				dp("delete range inode#%d, from %ld to %ld ...\n", hid, start,end);
 				if( hid == 1 ) {
 					pado_del_range(inode, start, end);
-					print_extent( find_start_extent(inode, 0) ,0);
+					print_extent( find_start_extent(inode, 0) ,0, inode->num_exts);
 				} else {
 					pado_del_range(inode2, start, end);
-					print_extent( find_start_extent(inode2, 0) ,0);
+					print_extent( find_start_extent(inode2, 0) ,0, inode2->num_exts);
 				}
 				check_bst(inode->flayout, &max, &min);
 				if( inode->flayout) assert(inode->size >= max);
@@ -130,7 +130,8 @@ int main(int argc, char **argv)
 	return 0;
 }
 
-void print_extent(struct extent *ext, int clone) {
+void print_extent(struct extent *ext, int clone, uint32_t num_exts) {
+	uint32_t num = 0;
 	struct extent *h;
 	dp("-  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -\n");
 	while( ext ) {
@@ -142,9 +143,10 @@ void print_extent(struct extent *ext, int clone) {
 		if( clone != 1 ) {
 			check_extent(ext,0,0);
 		}
-
 		ext = ext->next;
+		num++;
 	}
+	if( num_exts > 0 ) assert( num == num_exts );
 	dp("-  -  -  -  -  -  -  -  -  -  -  -  -  -  -  -\n");
 }
 

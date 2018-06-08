@@ -1,4 +1,4 @@
-#include"inserver.h"
+#include"incont.h"
 
 ino_t inodebase;
 
@@ -14,8 +14,11 @@ struct inode_hash_item *inode_map = NULL;
 pthread_rwlock_t imlock = PTHREAD_RWLOCK_INITIALIZER;
 
 
-void init_inode_container(uint32_t nodeid) {
-	inodebase = ((ino_t)nodeid <<32) + 1;
+void init_inode_container(uint32_t nodeid, ino_t base) {
+	if( base >0 )
+		inodebase = base;
+	else
+		inodebase = ((ino_t)nodeid <<32) + 1;
 }
 
 struct inode *get_new_inode() {
@@ -33,18 +36,22 @@ int release_inode(struct inode *inode) {
 	}
 }
 
-struct inode *create_inode(const char *name, short mode, ino_t pino, ino_t bino, 
+struct inode *create_inode(const char *name, ino_t ino, short mode, ino_t pino, ino_t bino, 
                            unsigned int uid, unsigned int gid, size_t size) 
 {
 	struct inode *new_inode = get_new_inode();
-	
-	pthread_mutex_lock(&ino_mut);
-	new_inode->ino = inodebase++;
-	pthread_mutex_unlock(&ino_mut);
+
+	if( ino > 0 ) {
+		new_inode->ino = ino; 
+	} else {
+		pthread_mutex_lock(&ino_mut);
+		new_inode->ino = inodebase++;
+		pthread_mutex_unlock(&ino_mut);
+	}
 
 	clock_gettime(CLOCK_REALTIME, &(new_inode->ctime) );
-	new_inode->mtime = new_inode->ctime;
-	new_inode->atime = new_inode->ctime;
+	new_inode->mtime.tv_sec = new_inode->ctime.tv_sec;
+	new_inode->atime.tv_sec = new_inode->ctime.tv_sec;
 
 	strncpy(new_inode->name,name, FILE_NAME_SIZE);
 	new_inode->mode = mode;
@@ -75,6 +82,7 @@ struct inode *create_inode(const char *name, short mode, ino_t pino, ino_t bino,
 	HASH_ADD(hh, inode_map, key, sizeof(ino_t), hi);
 	pthread_rwlock_unlock(&imlock);
 
+	new_inode->num_exts = 0;
 	return new_inode;
 }
 
@@ -84,6 +92,15 @@ struct inode *get_inode(ino_t ino) {
 	HASH_FIND(hh, inode_map, &ino, sizeof(ino_t), hi);
 	pthread_rwlock_unlock(&imlock);
 	return hi->value;
+}
+
+void set_inode_aux(struct inode *tar, time_t at, time_t mt, time_t ct, size_t bsize, ino_t sino) {
+	tar->atime.tv_sec = at;
+	tar->mtime.tv_sec = at;
+	tar->ctime.tv_sec = at;
+
+	tar->base_size = bsize;
+	tar->shared_ino = sino;
 }
 
 struct extent *create_extent(struct dobject *dobj, size_t off_f, size_t off_do, size_t length) 
@@ -275,7 +292,12 @@ void pado_write(struct inode *inode, struct dobject *dobj, size_t off_f, size_t 
 	} else {
 		inode->flayout = new_ext;
 		new_ext->pivot = &inode->flayout;
+		inode->num_exts = 1;
 	}
+
+	clock_gettime(CLOCK_REALTIME_COARSE, &(inode->mtime) );
+	inode->ctime.tv_sec = inode->mtime.tv_sec;
+	inode->atime.tv_sec = inode->mtime.tv_sec;
 
 	pthread_rwlock_unlock(&inode->rwlock);
 }
@@ -290,6 +312,10 @@ void pado_truncate(struct inode *inode, size_t newsize)
 	if( newsize < oldsize ) {
 		replace(inode, NULL, NULL, newsize, oldsize);
 	}
+
+	clock_gettime(CLOCK_REALTIME_COARSE, &(inode->mtime) );
+	inode->ctime.tv_sec = inode->mtime.tv_sec;
+	inode->atime.tv_sec = inode->mtime.tv_sec;
 
 	pthread_rwlock_unlock(&inode->rwlock);
 }
@@ -306,6 +332,10 @@ void pado_del_range(struct inode *inode, size_t start, size_t end)
 	if( start < oldsize ) {
 		replace(inode, NULL, NULL, start, MIN(end, oldsize) );
 	}
+
+	clock_gettime(CLOCK_REALTIME_COARSE, &(inode->mtime) );
+	inode->ctime.tv_sec = inode->mtime.tv_sec;
+	inode->atime.tv_sec = inode->mtime.tv_sec;
 
 	pthread_rwlock_unlock(&inode->rwlock);
 }
@@ -370,8 +400,14 @@ void pado_clone(struct inode *tinode, int fd, size_t start, size_t end)
 #endif 
 
 	pthread_rwlock_wrlock(&tinode->rwlock);
+	
 	tinode->size = MAX(tinode->size, end);
 	replace(tinode, alts, tail, start, end);
+
+	clock_gettime(CLOCK_REALTIME_COARSE, &(tinode->mtime) );
+	tinode->ctime.tv_sec = tinode->mtime.tv_sec;
+	tinode->atime.tv_sec = tinode->mtime.tv_sec;
+
 	pthread_rwlock_unlock(&tinode->rwlock);
 }
 
@@ -508,6 +544,7 @@ void replace(struct inode *inode, struct extent* alts, struct extent *tail, size
 			replace_extent(dh, alte);
 			tor = alte;
 		} else {
+			inode->num_exts--;
 			remove_extent(dh, 1);
 		}
 		dh = dnext;
@@ -551,6 +588,7 @@ void replace(struct inode *inode, struct extent* alts, struct extent *tail, size
 			assert(0);
 		}
 		rebalance(alte->parent);
+		inode->num_exts++;
 	}
 
 	// check mergeability of the last extent added
@@ -560,6 +598,7 @@ void replace(struct inode *inode, struct extent* alts, struct extent *tail, size
 			dp("   last ext is merged!!\n");
 			tail->length += tail->next->length;
 			remove_extent(tail->next, 1);
+			inode->num_exts--;
 		}
 	}
 }
@@ -726,6 +765,53 @@ void pado_read(struct inode *inode, int fd, int flag, size_t start, size_t end) 
 	loid = 0;
 	write(fd, &hid, sizeof(uint32_t));
 	write(fd, &loid, sizeof(ino_t));
+
+	clock_gettime(CLOCK_REALTIME_COARSE, &(inode->atime) );
+	pthread_rwlock_unlock(&inode->rwlock);
+}
+
+void pado_getinode(struct inode *inode, int fd) 
+{
+	dp("pado getinode ino = %ld\n",inode->ino);
+	pthread_rwlock_rdlock(&inode->rwlock);
+	
+	write(fd, &inode->ino , sizeof(ino_t) );
+	write(fd, &inode->mode , sizeof(unsigned short) );
+	write(fd, &inode->uid , sizeof(unsigned int) );
+	write(fd, &inode->gid , sizeof(unsigned int) );
+	write(fd, &inode->size , sizeof(size_t) );
+	write(fd, &inode->atime.tv_sec , sizeof(time_t) );
+	write(fd, &inode->mtime.tv_sec , sizeof(time_t) );
+	write(fd, &inode->ctime.tv_sec , sizeof(time_t) );
+	write(fd, &inode->name , FILE_NAME_SIZE );
+	write(fd, &inode->parent_ino , sizeof(ino_t) );
+	write(fd, &inode->base_ino , sizeof(ino_t) );
+	write(fd, &inode->base_size , sizeof(size_t) );
+	write(fd, &inode->shared_ino , sizeof(ino_t) );
+	pthread_rwlock_unlock(&inode->rwlock);
+}
+
+void pado_getinode_all(struct inode *inode, int fd) 
+{
+	dp("pado getinodeall ino = %ld\n",inode->ino);
+	pthread_rwlock_rdlock(&inode->rwlock);
+	
+	pado_getinode(inode,fd);
+
+	write(fd, &(inode->num_exts), sizeof(uint32_t));
+	
+	struct extent *cur = find_start_extent(inode, 0);
+
+	while( cur ) {
+		write(fd, &(cur->dobj->addr.host_id), sizeof(uint32_t));
+		write(fd, &(cur->dobj->addr.loid), sizeof(ino_t));
+
+		write(fd, &(cur->off_f), sizeof(size_t));
+		write(fd, &(cur->off_do), sizeof(size_t));
+		write(fd, &(cur->length), sizeof(size_t));
+
+		cur = cur->next;
+	}
 
 	pthread_rwlock_unlock(&inode->rwlock);
 }
