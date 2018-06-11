@@ -44,7 +44,7 @@ void do_backup(const char *outfilename) {
 	struct hitem *cur, *tmp;
 	ino_t lino, pino;
 
-	fd = open(outfilename,O_WRONLY | O_CREAT | O_TRUNC);
+	fd = creat(outfilename,0440);
 	if( fd < 0 ) {
 		perror("opening backup file:");
 		return;
@@ -68,7 +68,7 @@ int main(int argc, char **argv)
 {
 	int c;
 	uint16_t port = DEFAULT_PORT;
-	char outfilename[1014] = BACKUP_FILE_PATH;
+	char outfilename[1024] = BACKUP_FILE_PATH;
 	char infilename[1024] = {0};
 	int infileexist = 0;
 	int backup_flag = 1;

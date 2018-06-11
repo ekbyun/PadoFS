@@ -19,6 +19,7 @@ void init_inode_container(uint32_t nodeid, ino_t base) {
 		inodebase = base;
 	else
 		inodebase = ((ino_t)nodeid <<32) + 1;
+	dp("inode_container is created! base inode number = %ld\n", inodebase);
 }
 
 struct inode *get_new_inode() {
@@ -41,13 +42,15 @@ struct inode *create_inode(const char *name, ino_t ino, short mode, ino_t pino, 
 {
 	struct inode *new_inode = get_new_inode();
 
+	pthread_mutex_lock(&ino_mut);
 	if( ino > 0 ) {
 		new_inode->ino = ino; 
 	} else {
-		pthread_mutex_lock(&ino_mut);
 		new_inode->ino = inodebase++;
-		pthread_mutex_unlock(&ino_mut);
 	}
+	pthread_mutex_unlock(&ino_mut);
+
+	dp("Creating inode name=%s , ino = %ld\n",name, ino);
 
 	clock_gettime(CLOCK_REALTIME, &(new_inode->ctime) );
 	new_inode->mtime.tv_sec = new_inode->ctime.tv_sec;
@@ -91,7 +94,10 @@ struct inode *get_inode(ino_t ino) {
 	pthread_rwlock_rdlock(&imlock);
 	HASH_FIND(hh, inode_map, &ino, sizeof(ino_t), hi);
 	pthread_rwlock_unlock(&imlock);
-	return hi->value;
+	if( hi == NULL ) 
+		return NULL;
+	else 
+		return hi->value;
 }
 
 void set_inode_aux(struct inode *tar, time_t at, time_t mt, time_t ct, size_t bsize, ino_t sino) {
@@ -340,16 +346,12 @@ void pado_del_range(struct inode *inode, size_t start, size_t end)
 	pthread_rwlock_unlock(&inode->rwlock);
 }
 
-#ifndef TEST
-void pado_clone(struct inode *inode, int fd, size_t start, size_t end) 
+void pado_clone(struct inode *tinode, int fd, size_t start, size_t end) 
 {
 	if( end <= start ) {
 		return;
 	}
-#else
-struct extent *pado_clone_tmp(struct inode *tinode, int fd, size_t start, size_t end, struct extent **tailp) 
-{
-#endif 
+
 	struct extent *alts = NULL, *tail = NULL;
 
 	uint32_t hid;
@@ -387,18 +389,6 @@ struct extent *pado_clone_tmp(struct inode *tinode, int fd, size_t start, size_t
 
 	if( alts ) assert( start <= alts->off_f );
 
-#ifdef TEST 
-	if( tailp ) *tailp = tail;
-
-	return alts;
-}
-
-void pado_clone(struct inode *tinode, int fd, size_t start, size_t end) 
-{
-	struct extent *alts, *tail;
-	alts = pado_clone_tmp(tinode, fd, start, end, &tail);
-#endif 
-
 	pthread_rwlock_wrlock(&tinode->rwlock);
 	
 	tinode->size = MAX(tinode->size, end);
@@ -426,6 +416,7 @@ void replace(struct inode *inode, struct extent* alts, struct extent *tail, size
 			inode->flayout->next = NULL;
 			inode->flayout->pivot = &inode->flayout;
 			start = inode->flayout->off_f + inode->flayout->length;
+			inode->num_exts++;
 		} else {
 			dp("does noting");
 			return;
@@ -815,6 +806,37 @@ void pado_getinode_all(struct inode *inode, int fd)
 
 	pthread_rwlock_unlock(&inode->rwlock);
 }
+
+void do_backup(int fd) {
+	struct inode_hash_item *cur, *tmp;
+
+	dp("Backing up whole inodes. inodebase = %ld\n",inodebase);
+
+	pthread_mutex_lock(&ino_mut);
+	write(fd, &inodebase, sizeof(ino_t));
+	pthread_rwlock_rdlock(&imlock);
+	HASH_ITER(hh, inode_map, cur, tmp) {
+		pado_getinode_all(cur->value, fd);
+	}
+	pthread_rwlock_unlock(&imlock);
+	pthread_mutex_unlock(&ino_mut);
+}
+
+#ifndef NODP
+void print_all() {
+	struct inode_hash_item *cur, *tmp;
+
+	dp("printing whole inodes. inodebase = %ld\n",inodebase);
+
+	pthread_mutex_lock(&ino_mut);
+	pthread_rwlock_rdlock(&imlock);
+	HASH_ITER(hh, inode_map, cur, tmp) {
+		print_inode(cur->value);
+	}
+	pthread_rwlock_unlock(&imlock);
+	pthread_mutex_unlock(&ino_mut);
+}
+#endif
 
 void rebalance(struct extent *ext) {
 	int dep_ori, dl, dr, dcl, dcr;

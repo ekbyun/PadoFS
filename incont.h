@@ -15,6 +15,7 @@
 #else
 #define dp(fmt,args...)
 #define dlp(fmt,args...)
+#define print_all()
 #endif
 
 #define FILE_NAME_SIZE	256
@@ -109,13 +110,11 @@ void pado_write(struct inode *, struct dobject *, size_t, size_t, size_t);
 void pado_truncate(struct inode *, size_t);
 void pado_del_range(struct inode *, size_t, size_t);
 void pado_clone(struct inode *, int, size_t, size_t);
-#ifdef TEST
-struct extent *pado_clone_tmp(struct inode *, int, size_t, size_t, struct extent **); 
-#endif
 
 void pado_read(struct inode *,int ,int, size_t, size_t);
 void pado_getinode(struct inode *, int);
 void pado_getinode_all(struct inode *,int);
+void do_backup(int);
 
 void replace(struct inode *, struct extent*, struct extent *,size_t, size_t);
 void remove_extent(struct extent *, int);
@@ -125,3 +124,9 @@ struct extent *find_start_extent(struct inode *, size_t loc);
 void rebalance(struct extent *);
 
 void check_extent(struct extent *,int, int);
+
+void test_main(void);
+#ifndef NODP
+void print_inode(struct inode *);
+void print_all(void);
+#endif

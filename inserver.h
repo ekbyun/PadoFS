@@ -1,14 +1,3 @@
-#define	INS_COM_READ_LAYOUT			0
-#define	INS_COM_WRITE				1
-#define	INS_COM_GET_INODE_COMPACT	2
-#define	INS_COM_GET_INODE_WHOLE		3
-#define	INS_COM_BACKUP_AND_STOP		4
-#define	INS_COM_TRUNCATE			5
-#define INS_COM_CLONE				6
-#define INS_COM_SET_INODE			7
-#define INS_COM_MAKE_INODE			8
-#define INS_COM_DELETE_INODE		9
-
 typedef enum {
 	WRITE,
 	TRUNCATE,
@@ -21,3 +10,9 @@ typedef enum {
 	DELETE_INODE,
 	BACKUP_AND_STOP
 } INS_COM;
+
+typedef enum {
+	SERVER_BUSY,
+	QUEUED,
+	DONE	
+} INS_RET;

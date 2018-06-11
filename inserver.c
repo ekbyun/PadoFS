@@ -15,7 +15,7 @@
 
 #define NUM_WORKER_THREADS  4
 
-#define BACKUP_FILE_PATH	"/tmp/inserver_backup.bin"
+#define BACKUP_FILE_PATH	"/tmp/pado_inode_server_backup.bin"
 #define DEFAULT_PORT		3495
 
 void usage() {
@@ -26,19 +26,23 @@ void usage() {
 	printf("                      If not set, start with an emtpy map\n");
 	printf("      -b [filepath] : filename with path to which mapping contents will be backuped when stopped.\n");
 	printf("                      default = " BACKUP_FILE_PATH "\n");
+	printf("      -n [nodeid]   : the node ID which will be used as the offset of inode number created in this server\n"); 
 	printf("      -h            : print this message\n");
 	exit(1);
 }
+
+void do_restore(int);
 
 int main(int argc, char **argv) 
 {
 	int c;
 	uint16_t port = DEFAULT_PORT;
-	char outfilename[1014] = BACKUP_FILE_PATH;
-	char infilename[1024] = {0};
+	char outfilename[1024] = BACKUP_FILE_PATH;
+	char infilename[1024] = {0,};
 	int infileexist = 0;
+	uint32_t nodeid = 0;
 
-	while( (c = getopt(argc, argv, "p:f:b:h" ))!= -1) {
+	while( (c = getopt(argc, argv, "p:f:n:hb:" ))!= -1) {
 		switch(c) {
 			case 'p':
 				port = atoi(optarg);
@@ -53,6 +57,9 @@ int main(int argc, char **argv)
 			case 'b':
 				strncpy(outfilename, optarg, strlen(optarg)+1);
 				break;
+			case 'n':
+				nodeid = atoi(optarg);
+				break;
 			case 'h':
 				usage();
 		}
@@ -60,28 +67,26 @@ int main(int argc, char **argv)
 
 	printf("Initializing PADOFS inode server.....\n");
 
+
 	int fd;
+	ino_t base;
 	if( infileexist ) {
 		printf("Restoring inodes from the file %s\n",infilename);
 		//restore hash map from file 
 		fd = open( infilename, O_RDONLY );
-		
 		if(fd == -1) {
 			printf("The backup file does't exist. Starting with an empty map.\n"); 
 		} else {
-			// TODO :
-
+			read(fd, &base, sizeof(ino_t));
+			init_inode_container(nodeid, base);
+			do_restore(fd);
 			close(fd);
 		}
+	} else {
+		init_inode_container(nodeid,0);
 	}
-
-	printf("com = %d\n",WRITE);
-	printf("com = %d\n",TRUNCATE);
-	printf("com = %d\n",READ_LAYOUT);
-	printf("com = %d\n",BACKUP_AND_STOP);
-
-	//TODO : initialize threads, jobs queues, 
 	
+	print_all();
 
 	int sockfd, clen;
 	struct sockaddr_in sa,ca;
@@ -112,7 +117,10 @@ int main(int argc, char **argv)
 
 	clen = sizeof(ca);
 
-	while(1)
+
+	//TODO : initialize threads, jobs queues, 
+
+	while(0)
 	{
 		fd = accept(sockfd, (struct sockaddr *)&ca, (socklen_t *)&clen);
 
@@ -132,15 +140,67 @@ int main(int argc, char **argv)
 			break;
 		}
 
-		// TODO : 
+		// TODO : enqueue or return BUSY MESSAGE
 		
-
+		close(fd);
 	}
 	close(sockfd);
 
+	test_main();
+
 	// TODO : backup process, 
 	// 1. joining threads, handle waiting requests.
-	// 2. serialize and backup to file 
+	
+	fd = creat(outfilename, 0440);
+	do_backup(fd);
+	close(fd);
 
 	return 0;
+}
+
+void do_restore(int fd) {
+	char fname[FILE_NAME_SIZE];
+	unsigned short mode;
+	ino_t ino, pino, bino, sino, loid;
+	unsigned int uid, gid;
+	size_t size, bsize, off_f, off_do, len;
+	time_t at,mt,ct;
+	uint32_t ne, hid;
+	struct inode *inode;
+	struct dobject *dobj;
+	int i;
+
+	dp("Restoring inode map\n");
+	while( read(fd, &ino, sizeof(ino_t)) ) 
+	{
+		read(fd, &mode, sizeof(unsigned short));
+		read(fd, &uid, sizeof(unsigned int));
+		read(fd, &gid, sizeof(unsigned int));
+		read(fd, &size, sizeof(size_t));
+		read(fd, &at, sizeof(time_t));
+		read(fd, &mt, sizeof(time_t));
+		read(fd, &ct, sizeof(time_t));
+		read(fd, fname, FILE_NAME_SIZE);
+		read(fd, &pino, sizeof(ino_t));
+		read(fd, &bino, sizeof(ino_t));
+		read(fd, &bsize, sizeof(size_t));
+		read(fd, &sino, sizeof(ino_t));
+
+		inode = create_inode(fname, ino, mode, pino, bino, uid, gid, size);
+		
+		read(fd, &ne, sizeof(uint32_t));
+
+		for(i = 0 ; i < ne ; i++) {
+			read(fd, &hid, sizeof(uint32_t));
+			read(fd, &loid, sizeof(ino_t));
+			read(fd, &off_f, sizeof(size_t));
+			read(fd, &off_do, sizeof(size_t));
+			read(fd, &len, sizeof(size_t));
+
+			dobj = get_dobject(hid, loid, inode);
+			pado_write(inode, dobj, off_f, off_do, len);
+		}
+
+		set_inode_aux(inode, at, mt, ct, bsize, sino);
+	}
 }
