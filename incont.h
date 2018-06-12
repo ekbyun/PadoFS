@@ -63,9 +63,9 @@ typedef unsigned long ino_t;
 
 struct inode {	//type may need to be changed defined in kernel /include/linux/types.h 
 	ino_t ino;	//inode number ino_pado
-	unsigned short mode;	//umode_t
-	unsigned int uid;	//uid_t
-	unsigned int gid;	//gid_t
+	mode_t mode;
+	uid_t uid;
+	gid_t gid;
 	size_t size;		//loff_t
 	struct timespec atime;
 	struct timespec mtime;
@@ -94,7 +94,7 @@ void init_inode_container(uint32_t, ino_t);
 struct inode *get_new_inode();
 int release_inode(struct inode *);
 
-struct inode *create_inode(const char *,ino_t, short,ino_t,ino_t,unsigned int,unsigned int, size_t);
+struct inode *create_inode(const char *,ino_t, mode_t, ino_t,ino_t,uid_t,gid_t, size_t);
 struct inode *get_inode(ino_t);
 void set_inode_aux(struct inode *,time_t,time_t,time_t,size_t,ino_t);
 

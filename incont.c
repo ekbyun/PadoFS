@@ -37,8 +37,8 @@ int release_inode(struct inode *inode) {
 	}
 }
 
-struct inode *create_inode(const char *name, ino_t ino, short mode, ino_t pino, ino_t bino, 
-                           unsigned int uid, unsigned int gid, size_t size) 
+struct inode *create_inode(const char *name, ino_t ino, mode_t mode, ino_t pino, ino_t bino, 
+                           uid_t uid, gid_t gid, size_t size) 
 {
 	struct inode *new_inode = get_new_inode();
 
@@ -767,9 +767,9 @@ void pado_getinode(struct inode *inode, int fd)
 	pthread_rwlock_rdlock(&inode->rwlock);
 	
 	write(fd, &inode->ino , sizeof(ino_t) );
-	write(fd, &inode->mode , sizeof(unsigned short) );
-	write(fd, &inode->uid , sizeof(unsigned int) );
-	write(fd, &inode->gid , sizeof(unsigned int) );
+	write(fd, &inode->mode , sizeof(mode_t) );
+	write(fd, &inode->uid , sizeof(uid_t) );
+	write(fd, &inode->gid , sizeof(gid_t) );
 	write(fd, &inode->size , sizeof(size_t) );
 	write(fd, &inode->atime.tv_sec , sizeof(time_t) );
 	write(fd, &inode->mtime.tv_sec , sizeof(time_t) );

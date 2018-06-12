@@ -12,11 +12,28 @@
 #include"inserver.h"
 #include"incont.h"
 #include"uthash.h"
+#include"pthread.h"
+#include"errno.h"
 
-#define NUM_WORKER_THREADS  4
+#define NUM_THREADS  4
+#define WQ_LENGTH	128
 
 #define BACKUP_FILE_PATH	"/tmp/pado_inode_server_backup.bin"
 #define DEFAULT_PORT		3495
+
+struct wqentry{
+	unsigned char com;
+	int fd;
+	struct wqentry *next;
+};
+
+struct wqentry *wqhead = NULL;
+struct wqentry *rqhead = NULL;
+
+pthread_mutex_t wq_mut = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t rq_mut = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t wq_cond = PTHREAD_COND_INITIALIZER;
+int cont = 1;
 
 void usage() {
 	printf("USAGE: inodeserver [OPTION]... &\n");
@@ -33,6 +50,8 @@ void usage() {
 
 void do_restore(int);
 
+void *worker_thread(void *);
+
 int main(int argc, char **argv) 
 {
 	int c;
@@ -41,6 +60,7 @@ int main(int argc, char **argv)
 	char infilename[1024] = {0,};
 	int infileexist = 0;
 	uint32_t nodeid = 0;
+	int i;
 
 	while( (c = getopt(argc, argv, "p:f:n:hb:" ))!= -1) {
 		switch(c) {
@@ -117,8 +137,30 @@ int main(int argc, char **argv)
 
 	clen = sizeof(ca);
 
+	pthread_t workers[NUM_THREADS];
+	int cret;
+	for(i = 0; i < NUM_THREADS; i++ ) {
+		cret = pthread_create(&(workers[i]), NULL, worker_thread, NULL);
+		if( !cret ) {
+			errno = cret;
+			perror("pthread_create:");
+			close(sockfd);
+			exit(0);
+		}
+	}
 
-	//TODO : initialize threads, jobs queues, 
+	struct wqentry *tail = NULL;
+	struct wqentry wqepool[WQ_LENGTH];
+	struct wqentry *entry = NULL;
+
+	for(i = 0; i < WQ_LENGTH ; i++) {
+		wqepool[i].next = rqhead;
+		rqhead = &(wqepool[i]);
+	}
+	
+	dp("%lx\n",(long)tail);
+
+	unsigned char ret;
 
 	while(0)
 	{
@@ -136,26 +178,123 @@ int main(int argc, char **argv)
 		dp("com = %c\n",com);
 
 		if(com == BACKUP_AND_STOP ) {
+			ret = (unsigned char)DONE;
+			write(fd, &ret, sizeof(unsigned char));
 			close(fd);
 			break;
 		}
 
-		// TODO : enqueue or return BUSY MESSAGE
-		
+		pthread_mutex_lock(&rq_mut);
+		if( rqhead == NULL ) {
+			ret = (unsigned char)SERVER_BUSY;
+			write(fd, &ret, sizeof(unsigned char));
+			close(fd);
+			continue;
+		}
+		entry = rqhead;
+		rqhead = rqhead->next;
+		pthread_mutex_unlock(&rq_mut);
+
+		entry->fd = fd;
+		entry->com = com;
+		entry->next = NULL;
+
+		pthread_mutex_lock(&wq_mut);
+		if( wqhead ) {
+			tail->next = entry;
+			tail = entry;	
+		} else {
+			wqhead = entry;
+			tail = entry;
+		}
+		pthread_mutex_unlock(&wq_mut);
+
+		ret = (unsigned char)QUEUED;
+		write(fd, &ret, sizeof(unsigned char));
 		close(fd);
 	}
 	close(sockfd);
 
 	test_main();
 
-	// TODO : backup process, 
-	// 1. joining threads, handle waiting requests.
-	
+	cont = 0;
+	pthread_cond_broadcast(&wq_cond);
+
+	for( i = 0 ; i < NUM_THREADS ; i++ ) {
+		pthread_join(i &(workers[i]), NULL );
+	}
+
 	fd = creat(outfilename, 0440);
 	do_backup(fd);
 	close(fd);
 
 	return 0;
+}
+
+void *worker_thread(void *arg) {
+	int tid;
+	int fd;
+	unsigned char com;
+	struct wqentry *entry;
+
+	tid = *((int *)arg);
+
+	while(cont) {
+		pthread_mutex_lock(&wq_mut);
+		while ( wqhead == NULL ) {
+			pthread_cond_wait(&wq_cond, &wq_mut);
+			if( cont == 0 ) {
+				pthread_mutex_unlock(&wq_mut);
+				return NULL;
+			}
+		}
+		fd = wqhead->fd;
+		com = wqhead->com;
+		entry = wqhead;
+		wqhead = wqhead->next;
+		pthread_mutex_unlock(&wq_mut);
+
+		pthread_mutex_lock(&rq_mut);
+		entry->next = rqhead;
+		rqhead = entry;
+		pthread_mutex_unlock(&rq_mut);
+
+		// TODO : 
+		printf("[%d] fd = %d , com = %c\n",tid, fd, com);
+
+		switch(com) {
+			case WRITE:
+				dp("write command has come\n");
+				break;
+			case TRUNCATE:
+				dp("truncate command has come\n");
+				break;
+			case READ_LAYOUT:
+				dp("read_layoute command has come\n");
+				break;
+			case CLONE:
+				dp("clone command has come\n");
+				break;
+			case GET_INODE:
+				dp("get_inode command has come\n");
+				break;
+			case GET_INODE_WHOLE:
+				dp("get_inode_wholewrite command has come\n");
+				break;
+			case SET_INODE:
+				dp("setinode command has come\n");
+				break;
+			case CREATE_INODE:
+				dp("create_inode command has come\n");
+				break;
+			case DELETE_INODE:
+				dp("delete_inode command has come\n");
+				break;
+		}
+
+	}
+
+	return NULL;
 }
 
 void do_restore(int fd) {
@@ -173,9 +312,9 @@ void do_restore(int fd) {
 	dp("Restoring inode map\n");
 	while( read(fd, &ino, sizeof(ino_t)) ) 
 	{
-		read(fd, &mode, sizeof(unsigned short));
-		read(fd, &uid, sizeof(unsigned int));
-		read(fd, &gid, sizeof(unsigned int));
+		read(fd, &mode, sizeof(mode_t));
+		read(fd, &uid, sizeof(uid_t));
+		read(fd, &gid, sizeof(gid_t));
 		read(fd, &size, sizeof(size_t));
 		read(fd, &at, sizeof(time_t));
 		read(fd, &mt, sizeof(time_t));
