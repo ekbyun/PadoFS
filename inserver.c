@@ -106,7 +106,7 @@ int main(int argc, char **argv)
 		init_inode_container(nodeid,0);
 	}
 	
-	print_all();
+//	print_all();
 
 	int sockfd, clen;
 	struct sockaddr_in sa,ca;

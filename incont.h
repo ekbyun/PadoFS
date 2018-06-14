@@ -15,7 +15,6 @@
 #else
 #define dp(fmt,args...)
 #define dlp(fmt,args...)
-#define print_all()
 #endif
 
 #define FILE_NAME_SIZE	256
@@ -126,7 +125,8 @@ void rebalance(struct extent *);
 void check_extent(struct extent *,int, int);
 
 void test_main(void);
-#ifndef NODP
+
+//#ifndef NODP
 void print_inode(struct inode *);
 void print_all(void);
-#endif
+//#endif

@@ -822,7 +822,7 @@ void do_backup(int fd) {
 	pthread_mutex_unlock(&ino_mut);
 }
 
-#ifndef NODP
+//#ifndef NODP
 void print_all() {
 	struct inode_hash_item *cur, *tmp;
 
@@ -836,7 +836,7 @@ void print_all() {
 	pthread_rwlock_unlock(&imlock);
 	pthread_mutex_unlock(&ino_mut);
 }
-#endif
+//#endif
 
 void rebalance(struct extent *ext) {
 	int dep_ori, dl, dr, dcl, dcr;

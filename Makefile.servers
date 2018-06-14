@@ -11,9 +11,8 @@ INOS_OBJS = $(INOS_SRCS:%.c=%.o)
 INOS_PROG = inodeserver
 
 CONV = convser
-TEST = test
 
-PROGS = $(INOS_PROG) $(TEST) $(CONV)
+PROGS = $(INOS_PROG) $(CONV) testlocal testremote
 #PROGS = $(INOS_PROG) $(CONV)
 
 .SUFFIXES:.c .o
@@ -28,7 +27,10 @@ all:$(PROGS)
 $(INOS_PROG): $(INOS_OBJS)
 	$(CC) $(INCLUDES) $(LIBS) -o $@ $^
 
-$(TEST): incont.o testlocal.o test.o
+testlocal: incont.o testlocal.o test.o
+	$(CC) $(INCLUDES) $(LIBS) -o $@ $^
+
+testremote: incont.o testremote.o test.o
 	$(CC) $(INCLUDES) $(LIBS) -o $@ $^
 
 $(CONV): $(CONV).o
@@ -38,7 +40,7 @@ clean:
 	rm -f $(PROGS) *.o
 
 dep:
-	gcc -M $(INCLUDES) $(INOS_SRCS) $(CONV).c test.c >.depend
+	gcc -M $(INCLUDES) $(INOS_SRCS) $(CONV).c test*.c >.depend
 
 distclean: clean
 	rm -rf .depend
