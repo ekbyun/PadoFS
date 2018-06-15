@@ -3,4 +3,6 @@
 .*.swp
 inodeserver
 testscript
-test
+testlocal
+testremote
+convser

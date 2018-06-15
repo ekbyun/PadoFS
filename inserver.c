@@ -33,7 +33,7 @@ struct wqentry *rqhead = NULL;
 pthread_mutex_t wq_mut = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t rq_mut = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t wq_cond = PTHREAD_COND_INITIALIZER;
-int cont = 1;
+int cont;
 
 void usage() {
 	printf("USAGE: inodeserver [OPTION]... &\n");
@@ -87,7 +87,6 @@ int main(int argc, char **argv)
 
 	printf("Initializing PADOFS inode server.....\n");
 
-
 	int fd;
 	ino_t base;
 	if( infileexist ) {
@@ -110,7 +109,6 @@ int main(int argc, char **argv)
 
 	int sockfd, clen;
 	struct sockaddr_in sa,ca;
-	unsigned char com;
 
 	sockfd = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -129,7 +127,7 @@ int main(int argc, char **argv)
 		exit(0);
 	}
 
-	if( listen(sockfd, 5) == -1 ) {
+	if( listen(sockfd, 32) == -1 ) {
 		perror("listen error:");
 		exit(0);
 	}
@@ -137,11 +135,15 @@ int main(int argc, char **argv)
 
 	clen = sizeof(ca);
 
+	cont = 1;
 	pthread_t workers[NUM_THREADS];
+	int ids[NUM_THREADS];
 	int cret;
 	for(i = 0; i < NUM_THREADS; i++ ) {
-		cret = pthread_create(&(workers[i]), NULL, worker_thread, NULL);
-		if( !cret ) {
+	//	cret = pthread_create(&(workers[i]), NULL, worker_thread, NULL);
+		ids[i] = i;
+		cret = pthread_create(&(workers[i]), NULL, worker_thread, &(ids[i]) );
+		if( cret != 0 ) {
 			errno = cret;
 			perror("pthread_create:");
 			close(sockfd);
@@ -149,7 +151,7 @@ int main(int argc, char **argv)
 		}
 	}
 
-	struct wqentry *tail = NULL;
+	struct wqentry *wqtail = NULL;
 	struct wqentry wqepool[WQ_LENGTH];
 	struct wqentry *entry = NULL;
 
@@ -158,11 +160,10 @@ int main(int argc, char **argv)
 		rqhead = &(wqepool[i]);
 	}
 	
-	dp("%lx\n",(long)tail);
-
+	unsigned char com;
 	unsigned char ret;
 
-	while(0)
+	while(1)
 	{
 		fd = accept(sockfd, (struct sockaddr *)&ca, (socklen_t *)&clen);
 
@@ -175,10 +176,10 @@ int main(int argc, char **argv)
 			close(fd);
 			continue;
 		}
-		dp("com = %c\n",com);
+		dp("com = %s\n",comstr[com]);
 
 		if(com == BACKUP_AND_STOP ) {
-			ret = (unsigned char)DONE;
+			ret = (unsigned char)SUCCESS;
 			write(fd, &ret, sizeof(unsigned char));
 			close(fd);
 			break;
@@ -186,6 +187,7 @@ int main(int argc, char **argv)
 
 		pthread_mutex_lock(&rq_mut);
 		if( rqhead == NULL ) {
+			pthread_mutex_unlock(&rq_mut);
 			ret = (unsigned char)SERVER_BUSY;
 			write(fd, &ret, sizeof(unsigned char));
 			close(fd);
@@ -201,28 +203,34 @@ int main(int argc, char **argv)
 
 		pthread_mutex_lock(&wq_mut);
 		if( wqhead ) {
-			tail->next = entry;
-			tail = entry;	
+			wqtail->next = entry;
+			wqtail = entry;	
 		} else {
 			wqhead = entry;
-			tail = entry;
+			wqtail = entry;
 		}
+		pthread_cond_signal(&wq_cond);
 		pthread_mutex_unlock(&wq_mut);
 
 		ret = (unsigned char)QUEUED;
 		write(fd, &ret, sizeof(unsigned char));
-		close(fd);
 	}
 	close(sockfd);
 
-	test_main();
+	dp("closing server...waiting to complete jobs in the queue by thraeds\n");
 
+	pthread_mutex_lock(&wq_mut);
 	cont = 0;
+	pthread_mutex_unlock(&wq_mut);
 	pthread_cond_broadcast(&wq_cond);
 
 	for( i = 0 ; i < NUM_THREADS ; i++ ) {
-		pthread_join(i &(workers[i]), NULL );
+		pthread_join( workers[i], NULL );
 	}
+
+	dp("All threads completed!\n");
+
+	dp("Starting backup to %s\n",outfilename);
 
 	fd = creat(outfilename, 0440);
 	do_backup(fd);
@@ -232,36 +240,52 @@ int main(int argc, char **argv)
 }
 
 void *worker_thread(void *arg) {
-	int tid;
 	int fd;
 	unsigned char com;
 	struct wqentry *entry;
 
-	tid = *((int *)arg);
+	ino_t tino;
+	/*
+	size_t off_f, off_do, len;
+	uint32_t hid;
+	ino_t loid;
+	*/
 
-	while(cont) {
+	int tid;
+	tid = *((int *)arg);
+	dp("Thread #%d started!\n",tid);
+
+	unsigned char ret;
+
+	while( 1 ) {
 		pthread_mutex_lock(&wq_mut);
-		while ( wqhead == NULL ) {
+		while ( wqhead == NULL && cont == 1 ) {
+			dp("Work queue is empty and server is not down. Thread #%d waiting..\n",tid);
 			pthread_cond_wait(&wq_cond, &wq_mut);
-			if( cont == 0 ) {
-				pthread_mutex_unlock(&wq_mut);
-				return NULL;
-			}
 		}
-		fd = wqhead->fd;
-		com = wqhead->com;
+		dp("Thread #%d is awaken now. cont = %d\n", tid, cont);
+		if( wqhead == NULL && cont == 0 ) {
+			pthread_mutex_unlock(&wq_mut);
+			break;
+		}
+
 		entry = wqhead;
 		wqhead = wqhead->next;
 		pthread_mutex_unlock(&wq_mut);
+
+		fd = entry->fd;
+		com = entry->com;
 
 		pthread_mutex_lock(&rq_mut);
 		entry->next = rqhead;
 		rqhead = entry;
 		pthread_mutex_unlock(&rq_mut);
 
-		// TODO : 
-		printf("[%d] fd = %d , com = %c\n",tid, fd, com);
+		read(fd, &tino, sizeof(ino_t));
+		dp("[%d] fd = %d , com = %s, target inode# = %ld\n", tid, fd, comstr[com], tino);
+		ret = (unsigned char)SUCCESS;
 
+		// TODO : 
 		switch(com) {
 			case WRITE:
 				dp("write command has come\n");
@@ -292,8 +316,13 @@ void *worker_thread(void *arg) {
 				break;
 		}
 
+		tino++;
+		write(fd, &tino, sizeof(ino_t));
+		write(fd, &ret, sizeof(unsigned char));
+		close(fd);
 	}
 
+	dp("Thread #%d finished!\n",tid);
 	return NULL;
 }
 

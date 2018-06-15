@@ -44,7 +44,7 @@ void do_backup(const char *outfilename) {
 	struct hitem *cur, *tmp;
 	ino_t lino, pino;
 
-	fd = creat(outfilename,0440);
+	fd = creat(outfilename,0666);
 	if( fd < 0 ) {
 		perror("opening backup file:");
 		return;
