@@ -37,12 +37,14 @@ int main(int argc, char **argv)
 		}
 		suc++;
 
-		com = 'P';
+	//	com = 'P';
+		com = 'G';
 		lino = i;
 		pino = rand() % INO_MAX;
 		write(client_sockfd, &com, sizeof(com));
 		write(client_sockfd, &lino, sizeof(lino));
-		write(client_sockfd, &pino, sizeof(pino));
+	//	write(client_sockfd, &pino, sizeof(pino));
+		read(client_sockfd, &pino, sizeof(pino));
 		close(client_sockfd);
 	}
 

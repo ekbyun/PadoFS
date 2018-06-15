@@ -1,0 +1,1 @@
+cmd_/root/work/PadoFS/module/padoclient.ko := ld -r -m elf_x86_64 -T ./scripts/module-common.lds --build-id  -o /root/work/PadoFS/module/padoclient.ko /root/work/PadoFS/module/padoclient.o /root/work/PadoFS/module/padoclient.mod.o

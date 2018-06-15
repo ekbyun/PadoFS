@@ -1,0 +1,1 @@
+cmd_/root/work/PadoFS/module/padoclient.o := ld -m elf_x86_64   -r -o /root/work/PadoFS/module/padoclient.o /root/work/PadoFS/module/testmodule.o /root/work/PadoFS/module/convcli.o ; scripts/mod/modpost /root/work/PadoFS/module/padoclient.o
