@@ -37,12 +37,11 @@ int main(int argc, char **argv)
 	srand(time(NULL));
 
 	dp("----------------------------------------------------------------------------------------------------------------------------\n");
-/*	
+///*	
 	while(1) {
-		dp("Insert command:");
 		scanf("%s %d %ld %ld %ld",com, &hid, &loid, &start, &end);
-*/
-//		/*
+//*/
+		/*
 	int i;
 	for( i = 0 ; i < 100000 ; i++ ) {
 		if( i % 10 < 10 ) {
@@ -59,9 +58,10 @@ int main(int argc, char **argv)
 			start = rand()%5000;
 			end = start+ rand()%5100;
 		}
-//	*/
+	*/
 		if( com[0] == '#' ) continue;
 		if( com[0] == 'q' || com[0] == 'Q' ) break;
+		if( com[0] != 'W' ) continue;
 		switch(com[0]) {
 			case 'W':	//write
 				if( end <= start ) {
@@ -110,6 +110,7 @@ int main(int argc, char **argv)
 			default:
 				dp("INVALID COMMAND. com=%s\n",com);
 		}
+		read_dobject( get_dobject( 20,30, inode), 0);
 	}
 	return 0;
 }

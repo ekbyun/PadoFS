@@ -17,7 +17,7 @@
 #define dlp(fmt,args...)
 #endif
 
-#define FILE_NAME_SIZE	256
+#define FILE_NAME_SIZE	255
 #define	MAX(x,y)	( (x) > (y) ? (x) : (y) )
 #define	MIN(x,y)	( (x) < (y) ? (x) : (y) )
 #define	ABS(x)		( ( (x) < 0 ) ? -(x) : (x) )
@@ -73,13 +73,13 @@ struct inode {	//type may need to be changed defined in kernel /include/linux/ty
 	struct extent *flayout;
 
 	char name[FILE_NAME_SIZE];
+	uint8_t is_shared;
 
 	ino_t parent_ino;
 
 	ino_t base_ino;
 	size_t base_size;
 
-	ino_t shared_ino;
 
 	struct dobject *do_map;
 	pthread_rwlock_t dmlock;	//lock for dobject hash-map
@@ -95,7 +95,7 @@ int release_inode(struct inode *);
 
 struct inode *create_inode(const char *,ino_t, mode_t, ino_t,ino_t,uid_t,gid_t, size_t);
 struct inode *get_inode(ino_t);
-void set_inode_aux(struct inode *,time_t,time_t,time_t,size_t,ino_t);
+void set_inode_aux(struct inode *,time_t,time_t,time_t,size_t,uint8_t);
 
 struct extent *create_extent(struct dobject *,size_t,size_t,size_t);
 void release_extent(struct extent *, int);
@@ -104,13 +104,14 @@ void replace_extent(struct extent *,struct extent *);
 
 struct dobject *get_dobject(uint32_t, ino_t, struct inode *);
 int remove_dobject(struct dobject *, int);
+int read_dobject(struct dobject *, int);
 
-void pado_write(struct inode *, struct dobject *, size_t, size_t, size_t);
+int pado_write(struct inode *, struct dobject *, size_t, size_t, size_t);
 void pado_truncate(struct inode *, size_t);
 void pado_del_range(struct inode *, size_t, size_t);
-void pado_clone(struct inode *, int, size_t, size_t);
+int pado_clone(struct inode *, int, size_t, size_t);
 
-void pado_read(struct inode *,int ,int, size_t, size_t);
+int pado_read(struct inode *,int ,int, size_t, size_t);
 void pado_getinode(struct inode *, int);
 void pado_getinode_all(struct inode *,int);
 void do_backup(int);

@@ -6,69 +6,178 @@
 #include<netinet/in.h>
 #include <fcntl.h>
 #include"errno.h"
+#include"test.h"
 
-#define INO_MAX	10000
+#define NUM_COM	10000
+#define NUM_INODE 2
 
 int main(int argc, char **argv) 
 {
+	pid_t pid;
 	int client_len;
-	int client_sockfd;
+	int sockfd;
 	struct sockaddr_in clientaddr; 
 	int i;
 	int suc = 0, fail = 0, fail2 = 0, c = 0, busy = 0;
 
 	clientaddr.sin_family = AF_INET;
-	clientaddr.sin_addr.s_addr = inet_addr("10.0.0.101");
+	clientaddr.sin_addr.s_addr = inet_addr("192.168.0.7");
 	clientaddr.sin_port = htons(3495);
 
 	client_len = sizeof(clientaddr);
 
 	srand(time(NULL));
+	pid = getpid();
 
-	unsigned char com,ret;
-	ino_t lino;
-	ino_t pino;
+	unsigned char com;
+	int ret;
+	ino_t tino;
+	ino_t tinos[NUM_INODE];
 
-	for(i = 0; i < INO_MAX; i++) {
-		c++;
-		client_sockfd = socket(AF_INET, SOCK_STREAM, 0);
-		if( connect(client_sockfd, (struct sockaddr *)&clientaddr, client_len) < 0 ) {
-			fail++;
-			close(client_sockfd);
-			continue;
+	char ci[4] = "W";
+	uint32_t hid;
+	ino_t loid;
+	size_t start, end;
+	
+	tinos[0] = 504588700852682753;
+	tinos[1] = 504588700852682754;
+	
+	/*
+	ino_t pino = 10, bino;
+	mode_t mode = 0666;
+	uid_t uid = 7;
+	gid_t gid = 17;
+	char name[FILE_NAME_SIZE] = "testfile";
+	size_t size = 4096;
+
+	for(i = 0 ; i < NUM_INODE; i++ ) {
+		com = CREATE_INODE;
+		sprintf(name,"testfile%02d",i);
+		sockfd = socket(AF_INET, SOCK_STREAM, 0);
+		if( connect(sockfd, (struct sockaddr *)&clientaddr, client_len) < 0 ) {
+			exit(0);
 		}
-		suc++;
+		bino = i + 100;
+		uid++;
+		gid++;
+		write(sockfd, &com, sizeof(com));
+		write(sockfd, &mode, sizeof(mode));
+		write(sockfd, &uid, sizeof(uid));
+		write(sockfd, &gid, sizeof(gid));
+		write(sockfd, &pino, sizeof(pino));
+		write(sockfd, &bino, sizeof(bino));
+		write(sockfd, name, FILE_NAME_SIZE);
+		write(sockfd, &size, sizeof(size));
 
-	//	com = 'P';
-		com = (i < INO_MAX-1) ? i % 9 : 9;
-	//	com = i % 9;
-		lino = i + 100;
-	//	pino = rand() % INO_MAX;
-		write(client_sockfd, &com, sizeof(com));
-		write(client_sockfd, &lino, sizeof(lino));
-		read(client_sockfd, &ret, sizeof(ret));
-		dp("command %s %ld ===> returns %s\n",comstr[com],lino,retstr[ret]);
-		if( ret == SERVER_BUSY ) {
-			busy++;
-		} else if( ret == QUEUED ) {
-			read(client_sockfd, &pino, sizeof(pino));
-			read(client_sockfd, &ret, sizeof(ret));
-			if( pino - lino != 1 ) { 
-				fail2++;
+		read(sockfd,&ret,sizeof(ret));
+		if(	 ret == SERVER_BUSY ) {
+			fail++;
+		} else if ( ret == QUEUED ) {
+			read(sockfd,&(tinos[i]),sizeof(ino_t));
+			read(sockfd,&ret,sizeof(ret));
+			if( ret < 0 ) {
+				fail++;
 			}
 		}
-		close(client_sockfd);
+		printf("create inode %s is done. ino = %ld,  ret = %s\n", name, tinos[i], retstr[ABS(ret)]);
+		close(sockfd);
+	}
+	if( fail > 0 ) exit(0);
+	*/
+///*
+	for(i = 0; i < NUM_COM; i++) {
+	/*
+		scanf("%s %d %ld %ld %ld",ci,&hid,&loid,&start,&end);
+
+		if( ci[0] == '#' ) continue;
+		if( ci[0] == 'q' || ci[0] == 'Q' ) break;
+		
+		if( ci[0] == 'W' ) com = WRITE;
+		else 
+			continue;
+	*/
+		com = WRITE;
+		hid = rand() % 5;
+		loid = rand() % 32;
+		start = rand() % 10000;
+		end = 10 + rand()%1000;
+
+		c++;
+		sockfd = socket(AF_INET, SOCK_STREAM, 0);
+		if( connect(sockfd, (struct sockaddr *)&clientaddr, client_len) < 0 ) {
+			fail++;
+			close(sockfd);
+			continue;
+		}
+
+		tino = tinos[i%NUM_INODE];
+	//	tino = tinos[0];
+
+		write(sockfd, &com, sizeof(com) );
+		write(sockfd, &tino, sizeof(tino) );
+	
+		switch(com) {
+			case WRITE:
+				write(sockfd, &hid, sizeof(hid));
+				write(sockfd, &loid, sizeof(loid));
+				write(sockfd, &start, sizeof(start));
+				write(sockfd, &start, sizeof(start));
+				write(sockfd, &end, sizeof(end));
+
+				read(sockfd,&ret,sizeof(ret));
+				if(	 ret == SERVER_BUSY ) {
+					busy++;
+				} else if ( ret == QUEUED ) {
+					read(sockfd,&ret,sizeof(ret));
+					if( ret < 0 ) {
+						fail++;
+					} else {
+						suc++;
+					}
+				} else {
+					printf("[%d]fail2 occurred ! %s\n",pid, retstr[ABS(ret)]);
+					fail2++;
+				}
+				dp("[%d]%s on %ld is done. ret = %s\n", pid,comstr[com], tino, retstr[ABS(ret)]);
+				break;
+		}
+
+		close(sockfd);
 	}
 
-	printf("success = %d/%d, fail = %d/%d echo fail = %d busy = %d\n",suc,c,fail,c, fail2, busy);
-	
-/*
-	client_sockfd = socket(AF_INET, SOCK_STREAM, 0);
-	connect(client_sockfd, (struct sockaddr *)&clientaddr, client_len);
-	com = 'Q';
-	write(client_sockfd, &com, sizeof(com));
-*/
-	close(client_sockfd);
+//*/		
+	printf("[%d]success = %d/%d, fail = %d/%d fail2=%d busy = %d (%s)\n",pid,suc,c,fail,c, fail2, busy, ci);
 
+/*
+	sockfd = socket(AF_INET, SOCK_STREAM, 0);
+	connect(sockfd, (struct sockaddr *)&clientaddr, client_len);
+	com = DELETE_RANGE;
+	tino = tinos[0];
+	hid = 20;
+	loid = 30;
+
+	write(sockfd, &com, sizeof(com));
+	write(sockfd, &tino, sizeof(tino));
+
+	start = 2000;
+	end = 4000;
+	write(sockfd, &start, sizeof(size_t));
+	write(sockfd, &end, sizeof(size_t));
+
+	read(sockfd, &ret, sizeof(ret));
+
+	read(sockfd, &ret, sizeof(ret));
+	close(sockfd);
+
+	printf("[%d]%s on %ld is done. ret = %s\n", pid,comstr[com], tino, retstr[ABS(ret)]);
+*/
+/*
+	sockfd = socket(AF_INET, SOCK_STREAM, 0);
+	connect(sockfd, (struct sockaddr *)&clientaddr, client_len);
+	com = BACKUP_AND_STOP;
+	write(sockfd, &com, sizeof(com));
+	read(sockfd, &ret, sizeof(ret));
+	close(sockfd);
+*/
 	return 0;
 }

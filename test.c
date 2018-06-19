@@ -11,13 +11,15 @@ void print_extent(struct extent *, int, uint32_t);
 void check_bst(struct extent *, size_t *, size_t *);
 
 void print_inode(struct inode *inode) {
-	size_t min,max;
+	size_t min = 0,max = 0;
+	pthread_rwlock_rdlock(&inode->rwlock);
 	dp("printing inode %s, ino=%ld, mode=%o, uid/gid=%d/%d\n",inode->name, inode->ino, inode->mode,inode->uid, inode->gid);
 	print_extent( find_start_extent(inode, 0) , 0, inode->num_exts);			
 	check_bst(inode->flayout, &max, &min); 
 	if( inode->flayout) assert(inode->size >= max);
 	dp("CHECK_BST SUCCESS min= %ld, max= %ld, size= %ld\n",min,max,inode->size);
 	dp("----------------------------------------------\n");
+	pthread_rwlock_unlock(&inode->rwlock);
 }
 
 void test_main() {
@@ -46,7 +48,7 @@ void test_main() {
 	dp("----------------------------------------------------------------------------------------------------------------------------\n");
 ///*	
 	while(1) {
-		dp("Insert command:");
+		printf("Insert command:");
 		scanf("%s %d %ld %ld %ld",com, &hid, &loid, &start, &end);
 //*/
 		/*
