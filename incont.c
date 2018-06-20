@@ -27,14 +27,14 @@ struct inode *get_new_inode() {
 	return (struct inode *)calloc(1, sizeof(struct inode));
 }
 
-int release_inode(struct inode *inode) {
+int delete_inode(struct inode *inode) {
     if( inode->flayout == NULL ) {
 		pthread_rwlock_destroy(&inode->rwlock);
 		pthread_rwlock_destroy(&inode->dmlock);
 		free(inode);
-		return 1;
+		return SUCCESS;
 	} else {
-		return -1;
+		return -EXTENT_EXIST;
 	}
 }
 
@@ -108,6 +108,28 @@ void set_inode_aux(struct inode *tar, time_t at, time_t mt, time_t ct, size_t bs
 
 	tar->base_size = bsize;
 	tar->is_shared = iss;
+}
+
+int get_inode_dobj(struct inode *inode, int fd) {
+	dp("pado get_inode_dobj ino = %ld\n",inode->ino);
+	uint32_t count;
+	struct dobject *cur, *tmp;
+
+	pthread_rwlock_rdlock(&inode->dmlock);
+	count = HASH_COUNT( inode->do_map );
+
+	write(fd, &count, sizeof(count));
+
+    HASH_ITER(hh, inode->do_map, cur, tmp) {
+		write(fd, &(cur->addr.host_id), sizeof(uint32_t));
+		write(fd, &(cur->addr.loid), sizeof(ino_t));
+
+		read_dobject(cur, fd);
+	}
+
+	pthread_rwlock_unlock(&inode->dmlock);
+	
+	return SUCCESS;
 }
 
 struct extent *create_extent(struct dobject *dobj, size_t off_f, size_t off_do, size_t length) 
@@ -879,6 +901,29 @@ void do_backup(int fd) {
 	}
 	pthread_rwlock_unlock(&imlock);
 	pthread_mutex_unlock(&ino_mut);
+}
+
+void stageout_all() {
+	struct inode_hash_item *cur, *tmp;
+
+	dp("Staging out all inodes\n");
+
+	pthread_mutex_lock(&ino_mut);
+	pthread_rwlock_rdlock(&imlock);
+	HASH_ITER(hh, inode_map, cur, tmp) {
+		stageout(cur->value);
+	}
+	pthread_rwlock_unlock(&imlock);
+	pthread_mutex_unlock(&ino_mut);
+}
+
+int stageout(struct inode *inode) {
+	dp("Staging out a inode %s(%ld)\n",inode->name,inode->ino);
+	// TODO:  
+	//
+	//
+	if( inode->flayout == NULL ) return SUCCESS;
+	else return -EXTENT_EXIST; 
 }
 
 //#ifndef NODP

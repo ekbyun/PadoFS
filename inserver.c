@@ -190,7 +190,7 @@ int main(int argc, char **argv)
 			continue;
 		}
 
-		if(com == BACKUP_AND_STOP ) {
+		if(com == BACKUP_AND_STOP || com == STAGE_OUT_ALL) {
 			ret = SUCCESS;
 			write(fd, &ret, sizeof(ret));
 			close(fd);
@@ -246,9 +246,13 @@ int main(int argc, char **argv)
 
 	dp("Starting backup to %s\n",outfilename);
 
-	fd = creat(outfilename, 0440);
-	do_backup(fd);
-	close(fd);
+	if( com == BACKUP_AND_STOP ) {
+		fd = creat(outfilename, 0440);
+		do_backup(fd);
+		close(fd);
+	} else if( com == STAGE_OUT_ALL ) {
+		stageout_all();
+	}
 
 	return 0;
 }
@@ -388,8 +392,7 @@ void *worker_thread(void *arg) {
 				write(fd, &tino, sizeof(ino_t));
 				break;
 			case DELETE_INODE:
-				// TODO:
-				dp("delete_inode has come\n");
+				ret = delete_inode(tinode);
 				break;
 			case READ_DOBJ:
 				read(fd, &hid, sizeof(hid));
@@ -405,6 +408,9 @@ void *worker_thread(void *arg) {
 				} else {
 					ret = remove_dobject( get_dobject(hid, loid, tinode), 1 );
 				}
+				break;
+			case GET_INODE_DOBJ:
+				ret = get_inode_dobj(tinode, fd);
 				break;
 		}
 		write(fd, &ret, sizeof(ret));
