@@ -76,27 +76,26 @@ struct inode {	//type may need to be changed defined in kernel /include/linux/ty
 	uint8_t is_shared;
 
 	ino_t parent_ino;
-
 	ino_t base_ino;
-	size_t base_size;
-
+//	size_t base_size;
+	uint32_t num_exts;
 
 	struct dobject *do_map;
 	pthread_rwlock_t dmlock;	//lock for dobject hash-map
 
 	pthread_rwlock_t rwlock;	//lock for read/write operations
-	uint32_t num_exts;
-	uint32_t num_dojbs;
+//	uint32_t num_dojbs;
 };
 
 void init_inode_container(uint32_t, ino_t);
 
 struct inode *get_new_inode();
+int release_inode(struct inode *);
 int delete_inode(struct inode *);
 
 struct inode *create_inode(const char *,ino_t, mode_t, ino_t,ino_t,uid_t,gid_t, size_t);
 struct inode *get_inode(ino_t);
-void set_inode_aux(struct inode *,time_t,time_t,time_t,size_t,uint8_t);
+void set_inode_aux(struct inode *,time_t,time_t,time_t,/*size_t,*/uint8_t);
 int get_inode_dobj(struct inode *,int);
 
 struct extent *create_extent(struct dobject *,size_t,size_t,size_t);
@@ -104,8 +103,8 @@ void release_extent(struct extent *, int);
 void insert_extent_list(struct extent *,struct extent *,struct extent *);
 void replace_extent(struct extent *,struct extent *);
 
-struct dobject *get_dobject(uint32_t, ino_t, struct inode *);
-int remove_dobject(struct dobject *, int);
+struct dobject *get_dobject(uint32_t, ino_t, struct inode *, int);
+int remove_dobject(struct dobject *, int, int);
 int read_dobject(struct dobject *, int);
 
 int pado_write(struct inode *, struct dobject *, size_t, size_t, size_t);

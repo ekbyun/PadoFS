@@ -27,7 +27,7 @@ struct inode *get_new_inode() {
 	return (struct inode *)calloc(1, sizeof(struct inode));
 }
 
-int delete_inode(struct inode *inode) {
+int release_inode(struct inode *inode) {
     if( inode->flayout == NULL ) {
 		pthread_rwlock_destroy(&inode->rwlock);
 		pthread_rwlock_destroy(&inode->dmlock);
@@ -36,6 +36,13 @@ int delete_inode(struct inode *inode) {
 	} else {
 		return -EXTENT_EXIST;
 	}
+}
+
+
+int delete_inode(struct inode *inode) {
+	// TODO
+	//
+	return SUCCESS;
 }
 
 struct inode *create_inode(const char *name, ino_t ino, mode_t mode, ino_t pino, ino_t bino, 
@@ -66,7 +73,7 @@ struct inode *create_inode(const char *name, ino_t ino, mode_t mode, ino_t pino,
 	new_inode->parent_ino = pino;
 
 	new_inode->base_ino = bino;
-	new_inode->base_size = size;
+//	new_inode->base_size = size;
 
 	new_inode->is_shared = 0;
 	
@@ -101,12 +108,12 @@ struct inode *get_inode(ino_t ino) {
 		return hi->value;
 }
 
-void set_inode_aux(struct inode *tar, time_t at, time_t mt, time_t ct, size_t bsize, uint8_t iss) {
+void set_inode_aux(struct inode *tar, time_t at, time_t mt, time_t ct,/* size_t bsize,*/ uint8_t iss) {
 	tar->atime.tv_sec = at;
 	tar->mtime.tv_sec = at;
 	tar->ctime.tv_sec = at;
 
-	tar->base_size = bsize;
+//	tar->base_size = bsize;
 	tar->is_shared = iss;
 }
 
@@ -124,6 +131,7 @@ int get_inode_dobj(struct inode *inode, int fd) {
 		write(fd, &(cur->addr.host_id), sizeof(uint32_t));
 		write(fd, &(cur->addr.loid), sizeof(ino_t));
 
+		pthread_mutex_lock( &(cur->reflock) );
 		read_dobject(cur, fd);
 	}
 
@@ -147,7 +155,7 @@ struct extent *create_extent(struct dobject *dobj, size_t off_f, size_t off_do, 
 	newone->off_do = off_do;
 	newone->length = length;
 
-	pthread_mutex_lock(&dobj->reflock);
+//	pthread_mutex_lock(&dobj->reflock);
 	newone->next_ref = dobj->refs;
 	newone->prev_ref = NULL;
 	if( dobj->refs ) {
@@ -166,6 +174,7 @@ void release_extent(struct extent *target, int unref)
 	struct dobject *dobj = NULL;
 	if( unref ) {
 		pthread_mutex_lock( &target->dobj->reflock );
+		
 		if( target->prev_ref ) {
 			target->prev_ref->next_ref = target->next_ref;
 		} else {
@@ -174,6 +183,7 @@ void release_extent(struct extent *target, int unref)
 		if( target->next_ref ) {
 			target->next_ref->prev_ref = target->prev_ref;
 		}
+
 		if( target->dobj->refs == NULL ) {
 			dobj = target->dobj;
 		}
@@ -184,7 +194,7 @@ void release_extent(struct extent *target, int unref)
 	
 	if( dobj ) {
 		dp(" trigger removing_dobject %lx\n",(long)dobj);
-		remove_dobject( dobj, 0 ); 
+		remove_dobject( dobj, 0 , 1); 
 	}
 }
 void insert_extent_list(struct extent *p, struct extent *t, struct extent *n) 
@@ -227,7 +237,7 @@ void replace_extent(struct extent *orie, struct extent *newe)
 	check_extent(newe,1,1);
 }
 
-struct dobject *get_dobject(uint32_t host_id, ino_t loid, struct inode *inode) 
+struct dobject *get_dobject(uint32_t host_id, ino_t loid, struct inode *inode, int create) 
 {
 	struct dobject *res, *hi;
 
@@ -242,7 +252,7 @@ struct dobject *get_dobject(uint32_t host_id, ino_t loid, struct inode *inode)
 	pthread_rwlock_wrlock(&inode->dmlock);
 	HASH_FIND(hh, inode->do_map, &res->addr, sizeof(struct do_addr), hi);
 
-	if( hi == NULL ) {
+	if( hi == NULL && create == 1 ) {
 		dp("Hash not found hid=%d, loid=%ld, pino=%ld\n", host_id, loid, inode->ino);
 
 		res->inode = inode;
@@ -252,18 +262,20 @@ struct dobject *get_dobject(uint32_t host_id, ino_t loid, struct inode *inode)
 
 		dp(" add new dobject %lx into hashtable\n",(long)res);
 		HASH_ADD_KEYPTR(hh, inode->do_map, &res->addr, sizeof(struct do_addr), res);
+	} else if ( hi == NULL && create != 1 ) {
 		pthread_rwlock_unlock(&inode->dmlock);
-	} else {
-		pthread_rwlock_unlock(&inode->dmlock);
+		return NULL;
+	} else {	// hi != NULL
 		dp("Hash found!! %lx, hid=%d, loid=%ld, pino=%ld\n", (long)hi, host_id, loid, inode->ino);
 		free(res);
 		res = hi;
 	}
-
+	pthread_mutex_lock( &res->reflock );
+	pthread_rwlock_unlock(&inode->dmlock);
 	return res;
 }
 
-int remove_dobject(struct dobject *dobj, int force) 
+int remove_dobject(struct dobject *dobj, int force, int unlink) 
 {
 	if( dobj == NULL ) {
 		return -INVALID_DOBJECT;
@@ -282,7 +294,9 @@ int remove_dobject(struct dobject *dobj, int force)
 
 	struct extent *ext;
 
+	pthread_rwlock_rdlock(&dobj->inode->dmlock);
 	pthread_mutex_lock( &dobj->reflock );
+	pthread_rwlock_unlock(&dobj->inode->dmlock);
 	
 	if( force != 1 && dobj->refs) {
 		pthread_mutex_unlock( &dobj->reflock );
@@ -309,33 +323,47 @@ int remove_dobject(struct dobject *dobj, int force)
 
 	free( dobj );
 
-	// TODO : send unlink message to data object server
+	if( unlink ) {
+	// TODO : send unlink message to data object server/
+	}
 
 	return SUCCESS;
 }
 
 int read_dobject(struct dobject *dobj, int fd) {
+	size_t off_f, off_do, len;
+
 	if( dobj == NULL ) {
+		off_f = 0;
+		off_do = 0;
+		len = 0;
+		write(fd, &off_f, sizeof(size_t));
+		write(fd, &off_do, sizeof(size_t));
+		write(fd, &len, sizeof(size_t));
 		return -INVALID_DOBJECT;
 	}
 	dp("reading dobject %lx, h=%d l=%ld p=%ld fd=%d\n",(long)dobj,dobj->addr.host_id,dobj->addr.loid,dobj->inode->ino,fd);
 	
 	struct extent *cur;
-	size_t off_f, len;
 
-	pthread_mutex_lock( &dobj->reflock );
+//	pthread_mutex_lock( &dobj->reflock );
+
 	cur = dobj->refs;
 	while( cur ) {
 		off_f = cur->off_f;
+		off_do = cur->off_do;
 		len = cur->length;
 		dp("off_f = %ld, len = %ld\n",off_f, len);
 		write(fd, &off_f, sizeof(size_t));
+		write(fd, &off_do, sizeof(size_t));
 		write(fd, &len, sizeof(size_t));
 		cur = cur->next_ref;
 	}
 	off_f = 0;
+	off_do = 0;
 	len = 0;
 	write(fd, &off_f, sizeof(size_t));
+	write(fd, &off_do, sizeof(size_t));
 	write(fd, &len, sizeof(size_t));
 	pthread_mutex_unlock( &dobj->reflock );
 
@@ -353,7 +381,7 @@ int pado_write(struct inode *inode, struct dobject *dobj, size_t off_f, size_t o
 	}
 
 	if( len <= 0 ) {
-		
+		return -INVALID_RANGE;
 	}
 
 	int ret = SUCCESS;
@@ -385,7 +413,7 @@ void pado_truncate(struct inode *inode, size_t newsize)
 	size_t oldsize = inode->size;
 
 	inode->size = newsize;
-	inode->base_size = MIN(inode->base_size, newsize);
+//	inode->base_size = MIN(inode->base_size, newsize);
 	if( newsize < oldsize ) {
 		replace(inode, NULL, NULL, newsize, oldsize);
 	}
@@ -404,7 +432,7 @@ void pado_del_range(struct inode *inode, size_t start, size_t end)
 
 	if( end >= oldsize ) {
 		inode->size = MIN(inode->size, start);
-		inode->base_size = MIN(inode->base_size, start);
+	//	inode->base_size = MIN(inode->base_size, start);
 	}
 	if( start < oldsize ) {
 		replace(inode, NULL, NULL, start, MIN(end, oldsize) );
@@ -447,10 +475,10 @@ int pado_clone(struct inode *tinode, int fd, size_t start, size_t end)
 		}
 
 		if( alts == NULL ) {
-			alts = create_extent( get_dobject(hid, loid, tinode), off_f, off_do, length);
+			alts = create_extent( get_dobject(hid, loid, tinode, 1), off_f, off_do, length);
 			tail = alts;
 		} else {
-			tail->next = create_extent( get_dobject(hid, loid, tinode), off_f, off_do, length);
+			tail->next = create_extent( get_dobject(hid, loid, tinode, 1), off_f, off_do, length);
 			tail = tail->next;
 		}
 		off_f += length;
@@ -526,6 +554,7 @@ void replace(struct inode *inode, struct extent* alts, struct extent *tail, size
 					alts->length += head_len;
 				} else {
 					dp("      the head part of the existing extent is added to a new extent\n");
+					pthread_mutex_lock( &(dh->dobj->reflock) );
 					tmp = create_extent( dh->dobj, dh->off_f, dh->off_do, start - Cs );
 					tmp->next = alts;
 					alts = tmp;
@@ -783,9 +812,11 @@ int pado_read(struct inode *inode, int fd, int flag, size_t start, size_t end)
 	uint32_t hid;
 	ino_t loid, bino;
 	size_t offset, length, dloc, bsize, diff;
+	int base_cloned = 0;
 
 	dloc = start;
-	bsize = inode->base_size;
+//	bsize = inode->base_size;
+	bsize = inode->size;
 	bino = inode->base_ino;
 	if( bino == 0 ) flag = 0;
 
@@ -797,6 +828,7 @@ int pado_read(struct inode *inode, int fd, int flag, size_t start, size_t end)
 				loid = bino;
 				offset = dloc;
 				length = MIN( cur->off_f, MIN(end, bsize) ) - dloc;
+				base_cloned = 1;
 			} else {	//write hole with zero file
 				hid = 1;
 				loid = 0;
@@ -839,7 +871,7 @@ int pado_read(struct inode *inode, int fd, int flag, size_t start, size_t end)
 	clock_gettime(CLOCK_REALTIME_COARSE, &(inode->atime) );
 	pthread_rwlock_unlock(&inode->rwlock);
 
-	return SUCCESS;
+	return (base_cloned) ? BASE_CLONED : SUCCESS;
 }
 
 void pado_getinode(struct inode *inode, int fd) 
@@ -858,7 +890,7 @@ void pado_getinode(struct inode *inode, int fd)
 	write(fd, &inode->name , FILE_NAME_SIZE );
 	write(fd, &inode->parent_ino , sizeof(ino_t) );
 	write(fd, &inode->base_ino , sizeof(ino_t) );
-	write(fd, &inode->base_size , sizeof(size_t) );
+//	write(fd, &inode->base_size , sizeof(size_t) );
 	write(fd, &inode->is_shared , sizeof(uint8_t) );
 	pthread_rwlock_unlock(&inode->rwlock);
 }
@@ -919,11 +951,32 @@ void stageout_all() {
 
 int stageout(struct inode *inode) {
 	dp("Staging out a inode %s(%ld)\n",inode->name,inode->ino);
-	// TODO:  
-	//
-	//
-	if( inode->flayout == NULL ) return SUCCESS;
-	else return -EXTENT_EXIST; 
+	struct dobject *cur, *tmp;
+	int numdos, i, ret = SUCCESS;
+	int *fds;
+	pthread_rwlock_wrlock( &inode->rwlock );
+	
+	numdos = HASH_COUNT( inode->do_map );
+	fds = calloc( sizeof(int), numdos );
+
+	HASH_ITER(hh, inode->do_map, cur, tmp) {
+		
+	// TODO: request date object server to migrate data to basefile
+	// dst doserver : hid 
+	// data to be migrated : use read_dobject to send list
+	// send 
+		pthread_mutex_lock( &(cur->reflock) );
+		remove_dobject( cur, 1, 0 );
+	}
+
+	for(i = 0 ; i < numdos ; i++ ) {
+		read( fds[i], &ret, sizeof(ret) );
+		close( fds[i] );
+	}
+
+	pthread_rwlock_unlock( &inode->rwlock );
+
+	return release_inode(inode);
 }
 
 //#ifndef NODP

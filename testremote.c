@@ -8,7 +8,7 @@
 #include"errno.h"
 #include"test.h"
 
-#define NUM_COM	10000
+#define NUM_COM	1000
 #define NUM_INODE 2
 
 int main(int argc, char **argv) 
@@ -19,10 +19,15 @@ int main(int argc, char **argv)
 	struct sockaddr_in clientaddr; 
 	int i;
 	int suc = 0, fail = 0, fail2 = 0, c = 0, busy = 0;
+	int port = 3495;
+
+	if( argc > 1 ) {
+		port = atoi(argv[1]);
+	}
 
 	clientaddr.sin_family = AF_INET;
 	clientaddr.sin_addr.s_addr = inet_addr("192.168.0.7");
-	clientaddr.sin_port = htons(3495);
+	clientaddr.sin_port = htons(port);
 
 	client_len = sizeof(clientaddr);
 
@@ -41,8 +46,7 @@ int main(int argc, char **argv)
 	
 	tinos[0] = 504588700852682753;
 	tinos[1] = 504588700852682754;
-	
-	/*
+//	/*	
 	ino_t pino = 10, bino;
 	mode_t mode = 0666;
 	uid_t uid = 7;
@@ -83,8 +87,7 @@ int main(int argc, char **argv)
 		close(sockfd);
 	}
 	if( fail > 0 ) exit(0);
-	*/
-///*
+//	*/
 	for(i = 0; i < NUM_COM; i++) {
 	/*
 		scanf("%s %d %ld %ld %ld",ci,&hid,&loid,&start,&end);
@@ -105,6 +108,7 @@ int main(int argc, char **argv)
 		c++;
 		sockfd = socket(AF_INET, SOCK_STREAM, 0);
 		if( connect(sockfd, (struct sockaddr *)&clientaddr, client_len) < 0 ) {
+			printf("[%d]fail to connect to server\n",pid);
 			fail++;
 			close(sockfd);
 			continue;
@@ -130,6 +134,7 @@ int main(int argc, char **argv)
 				} else if ( ret == QUEUED ) {
 					read(sockfd,&ret,sizeof(ret));
 					if( ret < 0 ) {
+						printf("[%d]fail occurred ! %s\n",pid, retstr[ABS(ret)]);
 						fail++;
 					} else {
 						suc++;
@@ -138,46 +143,57 @@ int main(int argc, char **argv)
 					printf("[%d]fail2 occurred ! %s\n",pid, retstr[ABS(ret)]);
 					fail2++;
 				}
-				dp("[%d]%s on %ld is done. ret = %s\n", pid,comstr[com], tino, retstr[ABS(ret)]);
+		//		dp("[%d]%s on %ld is done. ret = %s\n", pid,comstr[com], tino, retstr[ABS(ret)]);
 				break;
 		}
 
 		close(sockfd);
 	}
 
-//*/		
+//`*/		
 	printf("[%d]success = %d/%d, fail = %d/%d fail2=%d busy = %d (%s)\n",pid,suc,c,fail,c, fail2, busy, ci);
 
-/*
 	sockfd = socket(AF_INET, SOCK_STREAM, 0);
 	connect(sockfd, (struct sockaddr *)&clientaddr, client_len);
-	com = DELETE_RANGE;
+	com = READ_DOBJ;
 	tino = tinos[0];
-	hid = 20;
-	loid = 30;
+	hid = 3;
+	loid = 26;
+	size_t base_ino;
+	uint8_t shared;
 
 	write(sockfd, &com, sizeof(com));
 	write(sockfd, &tino, sizeof(tino));
 
-	start = 2000;
-	end = 4000;
-	write(sockfd, &start, sizeof(size_t));
-	write(sockfd, &end, sizeof(size_t));
+	write(sockfd, &hid, sizeof(hid));
+	write(sockfd, &loid, sizeof(loid));
 
 	read(sockfd, &ret, sizeof(ret));
+
+	read(sockfd, &base_ino, sizeof(base_ino));
+	read(sockfd, &shared, sizeof(shared));
+
+	printf("bino = %ld, shared=%d\n",base_ino, shared);
+
+	while(1) {
+		read(sockfd, &start, sizeof(size_t));
+		read(sockfd, &start, sizeof(size_t));
+		read(sockfd, &end, sizeof(size_t));
+		if( start == 0 && end == 0 ) break;
+		printf("off = %ld, len = %ld\n",start,end);
+	}
 
 	read(sockfd, &ret, sizeof(ret));
 	close(sockfd);
 
 	printf("[%d]%s on %ld is done. ret = %s\n", pid,comstr[com], tino, retstr[ABS(ret)]);
-*/
-/*
+	/*
 	sockfd = socket(AF_INET, SOCK_STREAM, 0);
 	connect(sockfd, (struct sockaddr *)&clientaddr, client_len);
 	com = BACKUP_AND_STOP;
 	write(sockfd, &com, sizeof(com));
 	read(sockfd, &ret, sizeof(ret));
 	close(sockfd);
-*/
+	*/
 	return 0;
 }

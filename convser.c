@@ -173,18 +173,21 @@ int main(int argc, char **argv)
 		}
 		dp("com = %c\n",com);
 
+		if(com == 'Q') {
+			close(fd);
+			break;
+		}
+
+		pino = 0;
+		hi = NULL;
+
 		switch(com) {		
 		case 'G':
-			if( read(fd, &lino, sizeof(ino_t) ) == 0 ) {
-				dp("EOF before receive Luster inode number\n");
-				pino = 0;
-			} else {
-				hi = NULL;
+			if( read(fd, &lino, sizeof(ino_t) ) > 0 ) {
 				HASH_FIND(hh, map, &lino, sizeof(ino_t), hi);
 				pino = (hi) ? hi->value : 0;
 			}
-			dp("lino = %ld, pino = %ld\n",lino, pino);
-			write(fd, &pino, sizeof(ino_t));
+			dp("get mapping lino = %ld, pino = %ld\n",lino, pino);
 			break;
 		case 'P':
 			if( read(fd, &lino, sizeof(ino_t) ) == 0 || read(fd, &pino, sizeof(ino_t) ) == 0  ) {
@@ -192,11 +195,10 @@ int main(int argc, char **argv)
 				break;
 			}
 			dp("lino = %ld, pino = %ld\n",lino, pino);
-			hi = NULL;
 			HASH_FIND(hh, map, &lino, sizeof(ino_t), hi);
 			if( hi ) {
-				dp("exist! overwrite!\n");
-				hi->value = pino;
+				dp("exist! return previous value %ld!\n", hi->value);
+				pino = hi->value;
 			} else {
 				dp("not exist! create a new pair\n");
 				hi = calloc( sizeof(struct hitem), 1);
@@ -206,9 +208,19 @@ int main(int argc, char **argv)
 				HASH_ADD(hh, map, key, sizeof(ino_t), hi);
 			}
 			break;
+		case 'D':
+			if( read(fd, &lino, sizeof(ino_t) ) > 0 ) {
+				HASH_FIND(hh, map, &lino, sizeof(ino_t), hi);
+				if( hi ) {
+					pino = hi->value;
+					HASH_DELETE(hh, map, hi);
+				}
+			}
+			dp("lino = %ld, pino = %ld is deleted\n",lino, pino);
+			break;
 		}
+		write(fd, &pino, sizeof(ino_t));
 		close(fd);
-		if(com == 'Q') break;
 	}
 	close(sockfd);
 

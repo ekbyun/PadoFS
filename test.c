@@ -78,7 +78,7 @@ void test_main() {
 					break;
 				}
 				dp("writing do(hid=%d,loid=%ld) to offset= %ld, length= %ld ...\n",hid, loid,start, end-start); 
-				dobj= get_dobject(hid, loid, inode);
+				dobj= get_dobject(hid, loid, inode, 1);
 				pado_write(inode, dobj, start, start, end-start);
 				print_inode(inode);
 				break;

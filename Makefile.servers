@@ -1,7 +1,7 @@
 CC = gcc
 
-CFLAGS += -Wall -Werror -c -DNODP
-#CFLAGS += -Wall -Werror -c
+#CFLAGS += -Wall -Werror -c -DNODP
+CFLAGS += -Wall -Werror -c
 
 LIBS = -lpthread -lrt
 INCLUDES = 

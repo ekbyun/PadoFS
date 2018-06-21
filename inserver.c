@@ -190,7 +190,7 @@ int main(int argc, char **argv)
 			continue;
 		}
 
-		if(com == BACKUP_AND_STOP || com == STAGE_OUT_ALL) {
+		if(com == BACKUP_AND_STOP || com == STAGEOUT_ALL) {
 			ret = SUCCESS;
 			write(fd, &ret, sizeof(ret));
 			close(fd);
@@ -250,7 +250,7 @@ int main(int argc, char **argv)
 		fd = creat(outfilename, 0440);
 		do_backup(fd);
 		close(fd);
-	} else if( com == STAGE_OUT_ALL ) {
+	} else if( com == STAGEOUT_ALL ) {
 		stageout_all();
 	}
 
@@ -329,7 +329,7 @@ void *worker_thread(void *arg) {
 				read(fd, &off_f, sizeof(off_f));
 				read(fd, &off_do, sizeof(off_do));
 				read(fd, &len, sizeof(len));
-				ret = pado_write( tinode, get_dobject(hid, loid, tinode), off_f, off_do, len); 
+				ret = pado_write( tinode, get_dobject(hid, loid, tinode, 1), off_f, off_do, len); 
 				break;
 			case TRUNCATE:
 				read(fd, &off_f, sizeof(off_f));
@@ -344,7 +344,8 @@ void *worker_thread(void *arg) {
 				read(fd, &off_f, sizeof(off_f));
 				read(fd, &len, sizeof(len));
 				ret = pado_read(tinode, fd, 1, off_f, off_f + len);
-				if( ret ==  SUCCESS ) {
+				if( ret == BASE_CLONED ) {
+					ret = SUCCESS;
 					tinode->is_shared = 1;
 				}
 				break;
@@ -391,26 +392,34 @@ void *worker_thread(void *arg) {
 				}
 				write(fd, &tino, sizeof(ino_t));
 				break;
-			case DELETE_INODE:
-				ret = delete_inode(tinode);
+			case RELEASE_INODE:
+				ret = release_inode(tinode);
 				break;
 			case READ_DOBJ:
 				read(fd, &hid, sizeof(hid));
 				read(fd, &loid, sizeof(loid));
-				ret = read_dobject( get_dobject(hid, loid, tinode), fd );
+				write(fd, &(tinode->base_ino), sizeof(ino_t));
+				write(fd, &(tinode->is_shared), sizeof(uint8_t));
+				ret = read_dobject( get_dobject(hid, loid, tinode, 0), fd );
 				break;
 			case REMOVE_DOBJ:
 				read(fd, &hid, sizeof(hid));
 				read(fd, &loid, sizeof(loid));
 				if( hid == 0 && loid == 0 ) {
-					ret = tinode->is_shared ? SUCCESS : INVALID_DOBJECT;
+					ret = tinode->is_shared ? SUCCESS : -INVALID_DOBJECT;
 					tinode->is_shared = 0;
 				} else {
-					ret = remove_dobject( get_dobject(hid, loid, tinode), 1 );
+					ret = remove_dobject( get_dobject(hid, loid, tinode, 0), 1, 0);
 				}
 				break;
 			case GET_INODE_DOBJ:
 				ret = get_inode_dobj(tinode, fd);
+				break;
+			case DELETE_INODE:
+				ret = delete_inode(tinode);
+				break;
+			case STAGEOUT:
+				ret = stageout(tinode);
 				break;
 		}
 		write(fd, &ret, sizeof(ret));
@@ -430,7 +439,7 @@ void do_restore(int fd) {
 	unsigned short mode;
 	ino_t ino, pino, bino, loid;
 	unsigned int uid, gid;
-	size_t size, bsize, off_f, off_do, len;
+	size_t size, /*bsize,*/ off_f, off_do, len;
 	time_t at,mt,ct;
 	uint32_t ne, hid;
 	uint8_t is_shared;
@@ -451,7 +460,7 @@ void do_restore(int fd) {
 		read(fd, fname, FILE_NAME_SIZE);
 		read(fd, &pino, sizeof(ino_t));
 		read(fd, &bino, sizeof(ino_t));
-		read(fd, &bsize, sizeof(size_t));
+	//	read(fd, &bsize, sizeof(size_t));
 		read(fd, &is_shared, sizeof(uint8_t));
 
 		inode = create_inode(fname, ino, mode, pino, bino, uid, gid, size);
@@ -465,11 +474,11 @@ void do_restore(int fd) {
 			read(fd, &off_do, sizeof(size_t));
 			read(fd, &len, sizeof(size_t));
 
-			dobj = get_dobject(hid, loid, inode);
+			dobj = get_dobject(hid, loid, inode, 1);
 			pado_write(inode, dobj, off_f, off_do, len);
 		}
 
-		set_inode_aux(inode, at, mt, ct, bsize, is_shared);
+		set_inode_aux(inode, at, mt, ct, /* bsize,*/ is_shared);
 #ifndef NODP
 		print_inode(inode);
 #endif
