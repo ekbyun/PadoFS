@@ -182,19 +182,19 @@ int main(int argc, char **argv)
 		hi = NULL;
 
 		switch(com) {		
-		case 'G':
+		case 'G':	//get a pado_inode according to a incoming lustre_inode 
 			if( read(fd, &lino, sizeof(ino_t) ) > 0 ) {
 				HASH_FIND(hh, map, &lino, sizeof(ino_t), hi);
 				pino = (hi) ? hi->value : 0;
 			}
-			dp("get mapping lino = %ld, pino = %ld\n",lino, pino);
+			dp("get mapping lino = %lu, pino = %lu\n",lino, pino);
 			break;
-		case 'P':
+		case 'P':	// put new mapping if there is no mapping, return previous mapping if exist 
 			if( read(fd, &lino, sizeof(ino_t) ) == 0 || read(fd, &pino, sizeof(ino_t) ) == 0  ) {
 				dp("EOF before receive inode numbers\n");
 				break;
 			}
-			dp("lino = %ld, pino = %ld\n",lino, pino);
+			dp("lino = %lu, pino = %lu\n",lino, pino);
 			HASH_FIND(hh, map, &lino, sizeof(ino_t), hi);
 			if( hi ) {
 				dp("exist! return previous value %ld!\n", hi->value);
@@ -208,7 +208,7 @@ int main(int argc, char **argv)
 				HASH_ADD(hh, map, key, sizeof(ino_t), hi);
 			}
 			break;
-		case 'D':
+		case 'D':	// remove mapping 
 			if( read(fd, &lino, sizeof(ino_t) ) > 0 ) {
 				HASH_FIND(hh, map, &lino, sizeof(ino_t), hi);
 				if( hi ) {
@@ -216,11 +216,19 @@ int main(int argc, char **argv)
 					HASH_DELETE(hh, map, hi);
 				}
 			}
-			dp("lino = %ld, pino = %ld is deleted\n",lino, pino);
+			dp("lino = %lu, pino = %lu is deleted\n",lino, pino);
 			break;
 		}
 		write(fd, &pino, sizeof(ino_t));
 		close(fd);
+#ifndef NODP
+		dp("-----------L-P MAP ------------\n");
+		struct hitem *cur, *tmp;
+		HASH_ITER(hh, map, cur, tmp) {
+			dp("%lu -> %lu\n", cur->key, cur->value);
+		}
+		dp("-------------------------------\n");
+#endif
 	}
 	close(sockfd);
 

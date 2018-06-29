@@ -10,9 +10,9 @@ INOS_SRCS = inserver.c incont.c test.c
 INOS_OBJS = $(INOS_SRCS:%.c=%.o)
 INOS_PROG = inodeserver
 
-CONV = convser
+LPMAP_SERVER = lpmapser
 
-PROGS = $(INOS_PROG) $(CONV) testlocal testremote
+PROGS = $(INOS_PROG) $(LPMAP_SERVER) testlocal testremote
 #PROGS = $(INOS_PROG) $(CONV)
 
 .SUFFIXES:.c .o
@@ -33,7 +33,7 @@ testlocal: incont.o testlocal.o test.o
 testremote: incont.o testremote.o test.o
 	$(CC) $(INCLUDES) $(LIBS) -o $@ $^
 
-$(CONV): $(CONV).o
+$(LPMAP_SERVER): $(LPMAP_SERVER).o
 	$(CC) $(INCLUDES) $(LIBS) -o $@ $^
 
 clean:

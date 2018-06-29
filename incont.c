@@ -1,120 +1,221 @@
 #include"incont.h"
 #include"inserver.h"
 
-ino_t inodebase;
+char zeros[FILE_NAME_SIZE] = {0,};
 
+ino_t inodebase;
+ino_t inodemax;
+#define INBASE_LOW_MAX	0xFFFFFFFF
 pthread_mutex_t ino_mut = PTHREAD_MUTEX_INITIALIZER;
 
-struct inode_hash_item {
-	ino_t key;
-	struct inode *value;
-	UT_hash_handle hh;
-};
-
-struct inode_hash_item *inode_map = NULL;
+struct inode *inode_map = NULL;
 pthread_rwlock_t imlock = PTHREAD_RWLOCK_INITIALIZER;
 
+struct inode *cached_inode = NULL;
 
-void init_inode_container(uint32_t nodeid, ino_t base) {
-	if( base >0 )
-		inodebase = base;
-	else
+in_addr_t ms_addr_base;
+
+void init_inode_container(uint32_t nodeid, in_addr_t ms_addr/*ino_t base*/) {
+//	if( base >0 )
+//		inodebase = base;
+//	else
 		inodebase = ((ino_t)nodeid <<32) + 1;
-	dp("inode_container is created! base inode number = %ld\n", inodebase);
-}
+	inodemax = inodebase | INBASE_LOW_MAX;
 
-struct inode *get_new_inode() {
-	return (struct inode *)calloc(1, sizeof(struct inode));
-}
-
-int release_inode(struct inode *inode) {
-    if( inode->flayout == NULL ) {
-		pthread_rwlock_destroy(&inode->rwlock);
-		pthread_rwlock_destroy(&inode->dmlock);
-		free(inode);
-		return SUCCESS;
+	if( ms_addr > 0 ) {
+		ms_addr_base = ms_addr;
 	} else {
-		return -EXTENT_EXIST;
+		ms_addr_base = inet_addr(MS_ADDR_DEF);
 	}
+//	dp("inode_container is created! base inode number = %ld max=%ld\n", inodebase, inodemax);
+	dp("inode_container is created! base inode number = %lu max=%lu dos_addr_base=%u\n", inodebase, inodemax,ms_addr);
 }
 
-
-int delete_inode(struct inode *inode) {
-	// TODO
-	//
-	return SUCCESS;
+void get_ms_addr(struct sockaddr_in *addr, ino_t lino){
+	addr->sin_family = AF_INET;
+	addr->sin_port = htons(MS_PORT_DEF);
+	addr->sin_addr.s_addr = ms_addr_base + lino % 1;	//TODO : change
 }
 
-struct inode *create_inode(const char *name, ino_t ino, mode_t mode, ino_t pino, ino_t bino, 
-                           uid_t uid, gid_t gid, size_t size) 
+struct inode *create_inode(/*const char *name,*/ ino_t *ino, mode_t mode, ino_t pino, ino_t bino, 
+                           uid_t uid, gid_t gid, size_t size, int *ret) 
 {
-	struct inode *new_inode = get_new_inode();
-
-	pthread_mutex_lock(&ino_mut);
-	if( ino > 0 ) {
-		new_inode->ino = ino; 
+	struct inode *new_inode;
+	// obtain memory for new inode, reuse cache is used 
+	if( cached_inode ) {
+		new_inode = cached_inode;
 	} else {
-		new_inode->ino = inodebase++;
+		new_inode = calloc(1, sizeof(struct inode));
+		if( new_inode == NULL ) {
+			*ret = -INTERNAL_ERROR;
+			return NULL;
+		}
+		pthread_rwlock_init(&new_inode->alive, NULL);
+		pthread_rwlock_init(&new_inode->rwlock, NULL);
+		new_inode->flags = 0;
+		new_inode->do_map = NULL;
+		new_inode->flayout = NULL;	
+		new_inode->num_exts = 0;
+ 		new_inode->refcount = 1;
 	}
+	
+	pthread_mutex_lock(&ino_mut);
+	if( inodebase == inodemax ) {
+		dp("No more ino in this server\n");
+		*ret = -INO_FULL;
+		pthread_mutex_unlock(&ino_mut);
+		return NULL;
+	}
+	new_inode->ino = inodebase++;
 	pthread_mutex_unlock(&ino_mut);
 
-	dp("Creating inode name=%s , ino = %ld\n",name, ino);
+	dp("Creating inode ino = %lu for bino = %lu....", new_inode->ino, new_inode->base_ino);
 
-	clock_gettime(CLOCK_REALTIME, &(new_inode->ctime) );
-	new_inode->mtime.tv_sec = new_inode->ctime.tv_sec;
-	new_inode->atime.tv_sec = new_inode->ctime.tv_sec;
+	new_inode->parent_ino = pino;
+	new_inode->base_ino = bino;
+	new_inode->size = size;
 
-	strncpy(new_inode->name,name, FILE_NAME_SIZE);
+//	strncpy(new_inode->name, name, FILE_NAME_SIZE);
 	new_inode->mode = mode;
-
 	new_inode->uid = uid;
 	new_inode->gid = gid;
 
-	new_inode->parent_ino = pino;
+//	clock_gettime(CLOCK_REALTIME, &(new_inode->ctime) );
+//	new_inode->atime.tv_sec = new_inode->ctime.tv_sec;
+//	new_inode->mtime.tv_sec = new_inode->ctime.tv_sec;
 
-	new_inode->base_ino = bino;
-//	new_inode->base_size = size;
-
-	new_inode->is_shared = 0;
-	
-	new_inode->size = size;
-
-	new_inode->do_map = NULL;
-	pthread_rwlock_init(&new_inode->dmlock, NULL);
-	pthread_rwlock_init(&new_inode->rwlock, NULL);
-
-	new_inode->flayout = NULL;	
-
-	struct inode_hash_item *hi = calloc(sizeof(struct inode_hash_item),1);
-	hi->key = new_inode->ino;
-	hi->value = new_inode;
-
+	//register to inode map of this server
 	pthread_rwlock_wrlock(&imlock);
-	HASH_ADD(hh, inode_map, key, sizeof(ino_t), hi);
+	if( cached_inode ) {
+		HASH_DELETE(hh, inode_map, cached_inode);
+		cached_inode = NULL;
+	}
+	HASH_ADD_KEYPTR(hh, inode_map, &(new_inode->ino), sizeof(ino_t), new_inode);
 	pthread_rwlock_unlock(&imlock);
 
-	new_inode->num_exts = 0;
+	//	try to register to mapping server
+	struct sockaddr_in msaddr;
+	int sockfd;
+	unsigned char com = 'P';
+	get_ms_addr(&msaddr, bino);
+	
+	sockfd = socket(AF_INET, SOCK_STREAM, 0);
+	if( connect(sockfd, (struct sockaddr *)&msaddr, sizeof(msaddr)) < 0 ) {
+		*ret = -MS_CON_ERROR;
+		dp("failed to connect to mapping server\n");
+		cached_inode = new_inode;
+		return NULL;
+	}
+	write(sockfd, &com, sizeof(com));
+	write(sockfd, &bino, sizeof(ino_t));
+	write(sockfd, &new_inode->ino, sizeof(ino_t));
+	read(sockfd, ino, sizeof(ino_t));
+	close(sockfd);
+	if( *ino != new_inode->ino ) {
+		*ret = ALREADY_CREATED;
+		cached_inode = new_inode;
+		dp("failed because the inode for base_ino %lu is already created\n", bino);
+		return NULL;
+	}
+
+	dp("success\n");
 	return new_inode;
 }
 
-struct inode *get_inode(ino_t ino) {
-	struct inode_hash_item *hi;
-	pthread_rwlock_rdlock(&imlock);
-	HASH_FIND(hh, inode_map, &ino, sizeof(ino_t), hi);
+struct inode *acquire_inode(ino_t ino) {
+	struct inode *ret = NULL;
+
+	pthread_rwlock_rdlock(&imlock); 
+		HASH_FIND(hh, inode_map, &ino, sizeof(ino_t), ret);
+		if( ret == NULL ) {
+			pthread_rwlock_unlock(&imlock);
+			dp("No inode in this server with ino=%ld\n",ino);
+			return NULL;
+		}
+		pthread_rwlock_rdlock(&ret->alive);
 	pthread_rwlock_unlock(&imlock);
-	if( hi == NULL ) 
-		return NULL;
-	else 
-		return hi->value;
+	return ret;
 }
 
-void set_inode_aux(struct inode *tar, time_t at, time_t mt, time_t ct,/* size_t bsize,*/ uint8_t iss) {
-	tar->atime.tv_sec = at;
-	tar->mtime.tv_sec = at;
-	tar->ctime.tv_sec = at;
+void free_inode(struct inode *inode) {
+	pthread_rwlock_wrlock(&imlock); 
+	HASH_DELETE(hh, inode_map, inode);
+	pthread_rwlock_unlock(&imlock);
 
-//	tar->base_size = bsize;
-	tar->is_shared = iss;
+	pthread_rwlock_wrlock(&inode->alive); 
+	assert(inode->flayout == NULL);
+	assert(inode->num_exts == 0);
+	assert(inode->refcount == 0);
+	pthread_rwlock_destroy(&inode->rwlock);
+	pthread_rwlock_wrlock(&inode->alive); 
+	
+	pthread_rwlock_destroy(&inode->alive);
+	free(inode);	
+}
+
+// enter this functing with wrlock( rwlock ) acquired and rdlock( alive ) acquired 
+int release_inode(struct inode *inode) {	
+	if( inode->refcount > 0 || inode->flayout || IS_SHARED(inode) ) {
+		return 0;
+	}
+	dp("Releasing inode %lu\n",inode->ino);
+
+	SET_DELETED(inode);
+
+	// unregister mapping from l-p mapping server
+	struct sockaddr_in msaddr;
+	int sockfd;
+	unsigned char com = 'D';
+	ino_t bino = inode->base_ino;
+	get_ms_addr(&msaddr, bino);
+	
+	sockfd = socket(AF_INET, SOCK_STREAM, 0);
+	if( connect(sockfd, (struct sockaddr *)&msaddr, sizeof(msaddr)) >= 0 ) {
+		write(sockfd, &com, sizeof(com));
+		write(sockfd, &bino, sizeof(ino_t));
+		read(sockfd, &bino, sizeof(ino_t));
+		close(sockfd);
+	} else {
+		//TODO : handle error
+	}
+
+	return 1;
+}
+
+// enter this functing with wrlock( rwlock ) acquired and rdlock( alive ) acquired 
+int delete_inode(struct inode *inode) {
+	struct dobject *cur,*tmp;
+
+	//remove all dobjects, which may remove reference from distributed data objects  
+	HASH_ITER(hh, inode->do_map, cur, tmp) {
+		remove_dobject(cur, 1);
+	}
+
+	// drain shared basefile
+	if( IS_SHARED(inode) ) {
+		struct sockaddr_in caddr;
+		int fd, ret = SUCCESS;
+		unsigned char com = MOVE_SHARED_BASE;
+
+		caddr.sin_family = AF_INET;
+		caddr.sin_port = htons(DOS_ETH_PORT);
+		caddr.sin_addr.s_addr = inet_addr(DOS_ADDR_DEF);
+
+		fd = socket(AF_INET, SOCK_STREAM, 0);
+		if( connect(fd, (struct sockaddr *)&caddr, sizeof(caddr) ) < 0 ) {
+			perror("ref link fail:");
+			return 0;
+		}
+		write(fd, &com, sizeof(com));
+		write(fd, &inode->base_ino, sizeof(ino_t));
+		write(fd, &inode->ino, sizeof(ino_t));
+		read(fd, &ret, sizeof(ret) );
+		close(fd);
+		UNSET_SHARED(inode);
+	}
+
+	// set deleted and release inode from inode-map 
+	return release_inode(inode);
 }
 
 int get_inode_dobj(struct inode *inode, int fd) {
@@ -122,20 +223,14 @@ int get_inode_dobj(struct inode *inode, int fd) {
 	uint32_t count;
 	struct dobject *cur, *tmp;
 
-	pthread_rwlock_rdlock(&inode->dmlock);
 	count = HASH_COUNT( inode->do_map );
 
 	write(fd, &count, sizeof(count));
 
     HASH_ITER(hh, inode->do_map, cur, tmp) {
 		write(fd, &(cur->addr.host_id), sizeof(uint32_t));
-		write(fd, &(cur->addr.loid), sizeof(ino_t));
-
-		pthread_mutex_lock( &(cur->reflock) );
-		read_dobject(cur, fd);
+		write(fd, &(cur->addr.loid), sizeof(loid_t));
 	}
-
-	pthread_rwlock_unlock(&inode->dmlock);
 	
 	return SUCCESS;
 }
@@ -144,9 +239,7 @@ struct extent *create_extent(struct dobject *dobj, size_t off_f, size_t off_do, 
 {
 	struct extent *newone;
 	// need pooling
-	newone = malloc(sizeof(struct extent));
-
-	memset(newone, 0, sizeof(struct extent));
+	newone = calloc(1, sizeof(struct extent));
 
 	newone->depth = 1;
 	newone->dobj = dobj;
@@ -155,46 +248,48 @@ struct extent *create_extent(struct dobject *dobj, size_t off_f, size_t off_do, 
 	newone->off_do = off_do;
 	newone->length = length;
 
-//	pthread_mutex_lock(&dobj->reflock);
 	newone->next_ref = dobj->refs;
 	newone->prev_ref = NULL;
 	if( dobj->refs ) {
 		dobj->refs->prev_ref = newone;
 	}
 	dobj->refs = newone;
-	pthread_mutex_unlock(&dobj->reflock);
+	dobj->num_refs++;
+	dobj->inode->num_exts++;
 
 	dp("a new extent(%lx) is created. depth=%d, do=[%lx,%d,%ld,%ld],off=[%ld,%ld,%ld],ref=[%lx,%lx]\n",(long)newone,newone->depth,(long)newone->dobj,newone->dobj->addr.host_id,newone->dobj->addr.loid,newone->dobj->inode->ino,newone->off_f,newone->off_do,newone->length,(long)newone->prev_ref,(long)newone->next_ref);
 	return newone;
 }
 
-void release_extent(struct extent *target, int unref) 
+void release_extent(struct extent *target) 
 {
-	dp("releasing extent %lx, flag=%d, pn=[%lx,%lx]\n",(long)target,unref,(long)target->prev_ref,(long)target->next_ref );
+	dp("releasing extent %lx, pn=[%lx,%lx]\n",(long)target,(long)target->prev_ref,(long)target->next_ref );
 	struct dobject *dobj = NULL;
-	if( unref ) {
-		pthread_mutex_lock( &target->dobj->reflock );
 		
-		if( target->prev_ref ) {
-			target->prev_ref->next_ref = target->next_ref;
-		} else {
-			target->dobj->refs = target->next_ref;
-		}
-		if( target->next_ref ) {
-			target->next_ref->prev_ref = target->prev_ref;
-		}
-
-		if( target->dobj->refs == NULL ) {
-			dobj = target->dobj;
-		}
-		pthread_mutex_unlock( &target->dobj->reflock );
+	if( target->prev_ref ) {
+		target->prev_ref->next_ref = target->next_ref;
+	} else {
+		target->dobj->refs = target->next_ref;
 	}
+	if( target->next_ref ) {
+		target->next_ref->prev_ref = target->prev_ref;
+	}
+	target->dobj->num_refs--;
+	target->dobj->inode->num_exts--;
+
+	if( target->dobj->refs == NULL ) {
+		assert( target->dobj->num_refs == 0 );
+		dobj = target->dobj;
+	}
+#ifndef NDEBUG
+	check_dobject(target->dobj);
+#endif
 	// need pooling
 	free(target);
 	
 	if( dobj ) {
 		dp(" trigger removing_dobject %lx\n",(long)dobj);
-		remove_dobject( dobj, 0 , 1); 
+		remove_dobject(dobj, 1); 
 	}
 }
 void insert_extent_list(struct extent *p, struct extent *t, struct extent *n) 
@@ -232,121 +327,135 @@ void replace_extent(struct extent *orie, struct extent *newe)
 		newe->right->pivot = &(newe->right);
 	}
 
-	release_extent(orie, 1);
+	release_extent(orie);
 
+#ifndef NDEBUG
 	check_extent(newe,1,1);
+#endif
 }
 
-struct dobject *get_dobject(uint32_t host_id, ino_t loid, struct inode *inode, int create) 
+//flag : 0 : return null if not exist, 1: create new one if not exist, 2: crete new one and add ref on dos
+struct dobject *acquire_dobject(uint32_t host_id, loid_t loid, struct inode *inode, int flag) 
 {
-	struct dobject *res, *hi;
+	if( inode == NULL ) {
+		dp("acquire_dobject receive NULL inode hid=%u loid=%ld\n",host_id,loid);
+		return NULL;
+	}
 
-	res = malloc(sizeof(struct dobject));
-	
-	if(res == NULL) return NULL;
+	struct dobject *res = NULL;
+	struct do_addr addr;
+	memset(&addr, 0, sizeof(struct do_addr));
 
-	memset(res,0x00,sizeof(struct dobject));
-	res->addr.host_id = host_id;
-	res->addr.loid = loid;
+	addr.host_id = host_id;
+	addr.loid = loid;
 
-	pthread_rwlock_wrlock(&inode->dmlock);
-	HASH_FIND(hh, inode->do_map, &res->addr, sizeof(struct do_addr), hi);
+	struct sockaddr_in caddr;
+	int fd, ret;
+	unsigned char com = DRAIN_SHARED;
 
-	if( hi == NULL && create == 1 ) {
-		dp("Hash not found hid=%d, loid=%ld, pino=%ld\n", host_id, loid, inode->ino);
+	HASH_FIND(hh, inode->do_map, &addr, sizeof(struct do_addr), res);
 
+	if( res == NULL && flag > 0 ) {
+		dp("Hash not found.Create new one! hid=%u, loid=%ld, pino=%ld\n", host_id, loid, inode->ino);
+		res = calloc(1,sizeof(struct dobject));
+		if(res == NULL) return NULL;
+
+		res->addr.host_id = host_id;
+		res->addr.loid = loid;
 		res->inode = inode;
-
 		res->refs = NULL;
-		pthread_mutex_init( &res->reflock, NULL);
+		res->num_refs = 0;
 
 		dp(" add new dobject %lx into hashtable\n",(long)res);
 		HASH_ADD_KEYPTR(hh, inode->do_map, &res->addr, sizeof(struct do_addr), res);
-	} else if ( hi == NULL && create != 1 ) {
-		pthread_rwlock_unlock(&inode->dmlock);
+
+		// add refrence link in DOS, called by pado_clone
+		if( flag == 2 ) {
+			caddr.sin_family = AF_INET;
+			caddr.sin_port = htons(DOS_ETH_PORT);
+			caddr.sin_addr.s_addr = host_id;
+
+			fd = socket(AF_INET, SOCK_STREAM, 0);
+			if( connect(fd, (struct sockaddr *)&caddr, sizeof(caddr) ) < 0 ) {
+				dp("Fail to add link in data object server\n");
+				HASH_DELETE(hh, inode->do_map, res);
+				return NULL;
+			}  
+			write(fd, &com, sizeof(com));
+			write(fd, &loid, sizeof(loid));
+			write(fd, &inode->ino, sizeof(loid));
+			read(fd, &ret, sizeof(ret) );
+			close(fd);
+		}
+	} else if ( res == NULL && flag == 0 ) {
+		dp("Hash not found. return NULL. hid=%u, loid=%ld, pino=%ld\n", host_id, loid, inode->ino);
 		return NULL;
-	} else {	// hi != NULL
-		dp("Hash found!! %lx, hid=%d, loid=%ld, pino=%ld\n", (long)hi, host_id, loid, inode->ino);
-		free(res);
-		res = hi;
+	} else {	// res != NULL
+		dp("Hash found!! %lx, hid=%u, loid=%ld, pino=%ld\n", (long)res, host_id, loid, inode->ino);
 	}
-	pthread_mutex_lock( &res->reflock );
-	pthread_rwlock_unlock(&inode->dmlock);
+#ifndef NDEBUG
+	check_dobject(res);
+#endif
+
 	return res;
 }
 
-int remove_dobject(struct dobject *dobj, int force, int unlink) 
+int remove_dobject(struct dobject *dobj, /*int force, */int unlink) 
 {
 	if( dobj == NULL ) {
 		return -INVALID_DOBJECT;
 	}
-	dp("removing dobject %lx, h=%d l=%ld p=%ld force=%d\n",(long)dobj,dobj->addr.host_id,dobj->addr.loid,dobj->inode->ino,force);
+	dp("removing dobject %lx, h=%d l=%ld p=%ld \n",(long)dobj,dobj->addr.host_id,dobj->addr.loid,dobj->inode->ino);
 
-#ifndef NDEBUG
-	struct dobject *hi;
-    HASH_FIND(hh, dobj->inode->do_map, &dobj->addr, sizeof(struct do_addr), hi);
-	if( hi == NULL ) {
-		dp(" there is no such dobject\n");
-		return -INVALID_DOBJECT;
-	}
-	assert( hi );
-#endif
-
-	struct extent *ext;
-
-	pthread_rwlock_rdlock(&dobj->inode->dmlock);
-	pthread_mutex_lock( &dobj->reflock );
-	pthread_rwlock_unlock(&dobj->inode->dmlock);
+	HASH_DELETE(hh, dobj->inode->do_map, dobj);
 	
-	if( force != 1 && dobj->refs) {
-		pthread_mutex_unlock( &dobj->reflock );
-		dp("there are existing extents\n");
-		return -FAILED;
-	}
-
 	while( dobj->refs ) {
 		dp(" removing extent %lx force!!\n",(long)dobj->refs);
-		ext = dobj->refs;
-		dobj->refs = ext->next_ref;
-		dobj->inode->num_exts--;
-		remove_extent(ext, 0);
+		remove_extent(dobj->refs);
 	}
-	
-	pthread_mutex_unlock( &dobj->reflock );
 
-	pthread_mutex_destroy( &dobj->reflock);
+	struct sockaddr_in caddr;
+	int fd, ret = SUCCESS;
+	unsigned char com = ADD_LINK;
+	if( unlink ) {
+		caddr.sin_family = AF_INET;
+		caddr.sin_port = htons(DOS_ETH_PORT);
+		caddr.sin_addr.s_addr = dobj->addr.host_id;
 
-	pthread_rwlock_wrlock(&dobj->inode->dmlock);
-	dp("HASH_DELETE dobj=%lx\n",(long)dobj);
-	HASH_DELETE(hh, dobj->inode->do_map, dobj);
-	pthread_rwlock_unlock(&dobj->inode->dmlock);
+		fd = socket(AF_INET, SOCK_STREAM, 0);
+		if( connect(fd, (struct sockaddr *)&caddr, sizeof(caddr) ) < 0 ) {
+			perror("ref link fail:");
+			ret = FAILED;
+		} else { 
+			write(fd, &com, sizeof(com));
+			write(fd, &dobj->addr.loid, sizeof(loid_t));
+			write(fd, &dobj->inode->ino, sizeof(ino_t));
+			read(fd, &ret, sizeof(ret) );
+			close(fd);
+		}
+	}
 
 	free( dobj );
-
-	if( unlink ) {
-	// TODO : send unlink message to data object server/
-	}
-
-	return SUCCESS;
+	return ret;
 }
 
 int read_dobject(struct dobject *dobj, int fd) {
 	size_t off_f, off_do, len;
-
-	if( dobj == NULL ) {
-		off_f = 0;
-		off_do = 0;
-		len = 0;
-		write(fd, &off_f, sizeof(size_t));
-		write(fd, &off_do, sizeof(size_t));
-		write(fd, &len, sizeof(size_t));
-		return -INVALID_DOBJECT;
-	}
-	dp("reading dobject %lx, h=%d l=%ld p=%ld fd=%d\n",(long)dobj,dobj->addr.host_id,dobj->addr.loid,dobj->inode->ino,fd);
-	
+	uint32_t num = 0;
 	struct extent *cur;
 
-//	pthread_mutex_lock( &dobj->reflock );
+	if( dobj == NULL ) {
+		write(fd, &num, sizeof(num));
+		return -INVALID_DOBJECT;
+	}
+
+	dp("reading dobject %lx, h=%d l=%ld p=%ld fd=%d\n",(long)dobj,dobj->addr.host_id,dobj->addr.loid,dobj->inode->ino,fd);
+#ifndef NDEBUG
+	check_dobject(dobj);
+#endif	
+	
+	num = dobj->num_refs;
+	write(fd, &num, sizeof(num));
 
 	cur = dobj->refs;
 	while( cur ) {
@@ -359,34 +468,21 @@ int read_dobject(struct dobject *dobj, int fd) {
 		write(fd, &len, sizeof(size_t));
 		cur = cur->next_ref;
 	}
-	off_f = 0;
-	off_do = 0;
-	len = 0;
-	write(fd, &off_f, sizeof(size_t));
-	write(fd, &off_do, sizeof(size_t));
-	write(fd, &len, sizeof(size_t));
-	pthread_mutex_unlock( &dobj->reflock );
-
 	return SUCCESS;
 }
 
-int pado_write(struct inode *inode, struct dobject *dobj, size_t off_f, size_t off_do, size_t len) 
+int pado_write(struct dobject *dobj, size_t off_f, size_t off_do, size_t len) 
 {
-	if( inode == NULL || inode != dobj->inode ) {
+	if( dobj == NULL ) {
 		return -INVALID_DOBJECT;
 	}
+
+	struct inode *inode = dobj->inode;
 	struct extent *new_ext = create_extent(dobj, off_f, off_do, len);
+	
 	if( new_ext == NULL ) {
 		return -INTERNAL_ERROR;
 	}
-
-	if( len <= 0 ) {
-		return -INVALID_RANGE;
-	}
-
-	int ret = SUCCESS;
-
-	pthread_rwlock_wrlock(&inode->rwlock);
 
 	inode->size = MAX( inode->size , off_f + len );
 
@@ -395,44 +491,43 @@ int pado_write(struct inode *inode, struct dobject *dobj, size_t off_f, size_t o
 	} else {
 		inode->flayout = new_ext;
 		new_ext->pivot = &inode->flayout;
-		inode->num_exts = 1;
 	}
 
 	clock_gettime(CLOCK_REALTIME_COARSE, &(inode->mtime) );
-	inode->ctime.tv_sec = inode->mtime.tv_sec;
 	inode->atime.tv_sec = inode->mtime.tv_sec;
 
-	pthread_rwlock_unlock(&inode->rwlock);
-
-	return ret;
+	return SUCCESS;
 }
 
-void pado_truncate(struct inode *inode, size_t newsize) 
+int pado_truncate(struct inode *inode, size_t newsize) 
 {
-	pthread_rwlock_wrlock(&inode->rwlock);
+/*	if( inode == NULL ) {
+		return -INVALID_INO;
+	}	*/
 	size_t oldsize = inode->size;
 
 	inode->size = newsize;
-//	inode->base_size = MIN(inode->base_size, newsize);
 	if( newsize < oldsize ) {
 		replace(inode, NULL, NULL, newsize, oldsize);
 	}
 
 	clock_gettime(CLOCK_REALTIME_COARSE, &(inode->mtime) );
-	inode->ctime.tv_sec = inode->mtime.tv_sec;
 	inode->atime.tv_sec = inode->mtime.tv_sec;
-
-	pthread_rwlock_unlock(&inode->rwlock);
+	
+	return SUCCESS;
 }
 
-void pado_del_range(struct inode *inode, size_t start, size_t end) 
+/*
+int pado_del_range(struct inode *inode, size_t start, size_t end) 
 {
-	pthread_rwlock_wrlock(&inode->rwlock);
+	if( inode == NULL ) {
+		return -INVALID_INO;
+	}
+
 	size_t oldsize = inode->size;
 
 	if( end >= oldsize ) {
 		inode->size = MIN(inode->size, start);
-	//	inode->base_size = MIN(inode->base_size, start);
 	}
 	if( start < oldsize ) {
 		replace(inode, NULL, NULL, start, MIN(end, oldsize) );
@@ -443,61 +538,55 @@ void pado_del_range(struct inode *inode, size_t start, size_t end)
 	inode->atime.tv_sec = inode->mtime.tv_sec;
 
 	pthread_rwlock_unlock(&inode->rwlock);
+
+	return SUCCESS;
 }
+*/
 
 int pado_clone(struct inode *tinode, int fd, size_t start, size_t end) 
 {
+/*	if( tinode == NULL ) {
+		return -INVALID_INO;
+	}
 	if( end <= start ) {
 		return -INVALID_RANGE;
-	}
+	}*/
 
 	struct extent *alts = NULL, *tail = NULL;
 
 	uint32_t hid;
-	ino_t loid;
-	size_t off_f,off_do,length;
+	loid_t loid;
+	size_t offset, off_do,length, off_f;
 
-	off_f = start;
-
-	dp("running clone_tmp from %ld to %ld\n",start,end); 
+	dp("running clone from %ld to %ld\n",start,end); 
 	while(1) {
 		read(fd, &hid, sizeof(uint32_t));
-		read(fd, &loid, sizeof(ino_t));
+		read(fd, &loid, sizeof(loid_t));
 
-		if( hid == 0 && loid == 0 ) break;
+		if( hid == 0 && loid == 0 ) break;	//end of list
 
+		read(fd, &offset, sizeof(size_t));
 		read(fd, &off_do, sizeof(size_t));
 		read(fd, &length, sizeof(size_t));
 
-		if( hid > 0 && loid == 0 ) {
-			off_f += length;
-			continue;
-		}
+		off_f = start + offset;
+		if( off_f > end ) continue;
+		if( off_f + length > end ) length = end - off_f;
 
 		if( alts == NULL ) {
-			alts = create_extent( get_dobject(hid, loid, tinode, 1), off_f, off_do, length);
+			alts = create_extent( acquire_dobject(hid, loid, tinode, 2), off_f, off_do, length);
 			tail = alts;
 		} else {
-			tail->next = create_extent( get_dobject(hid, loid, tinode, 1), off_f, off_do, length);
+			tail->next = create_extent( acquire_dobject(hid, loid, tinode, 2), off_f, off_do, length);
 			tail = tail->next;
 		}
-		off_f += length;
 	}
 
-	if( off_f > end ) {
-		return -INVALID_RANGE_CLONE;
-	}
-	
-	pthread_rwlock_wrlock(&tinode->rwlock);
-	
 	tinode->size = MAX(tinode->size, end);
 	replace(tinode, alts, tail, start, end);
 
 	clock_gettime(CLOCK_REALTIME_COARSE, &(tinode->mtime) );
-	tinode->ctime.tv_sec = tinode->mtime.tv_sec;
 	tinode->atime.tv_sec = tinode->mtime.tv_sec;
-
-	pthread_rwlock_unlock(&tinode->rwlock);
 
 	return SUCCESS;
 }
@@ -518,7 +607,6 @@ void replace(struct inode *inode, struct extent* alts, struct extent *tail, size
 			inode->flayout->next = NULL;
 			inode->flayout->pivot = &inode->flayout;
 			start = inode->flayout->off_f + inode->flayout->length;
-			inode->num_exts++;
 		} else {
 			dp("does noting");
 			return;
@@ -554,7 +642,6 @@ void replace(struct inode *inode, struct extent* alts, struct extent *tail, size
 					alts->length += head_len;
 				} else {
 					dp("      the head part of the existing extent is added to a new extent\n");
-					pthread_mutex_lock( &(dh->dobj->reflock) );
 					tmp = create_extent( dh->dobj, dh->off_f, dh->off_do, start - Cs );
 					tmp->next = alts;
 					alts = tmp;
@@ -605,7 +692,7 @@ void replace(struct inode *inode, struct extent* alts, struct extent *tail, size
 		if( alts == tail ) tail = tor;
 		alte = alts;
 		alts = alts->next;
-		release_extent(alte, 1);
+		release_extent(alte);
 	}
 
 	// delete or replace existing extents within the range
@@ -636,8 +723,7 @@ void replace(struct inode *inode, struct extent* alts, struct extent *tail, size
 			replace_extent(dh, alte);
 			tor = alte;
 		} else {
-			inode->num_exts--;
-			remove_extent(dh, 1);
+			remove_extent(dh);
 		}
 		dh = dnext;
 	}
@@ -680,7 +766,6 @@ void replace(struct inode *inode, struct extent* alts, struct extent *tail, size
 			assert(0);
 		}
 		rebalance(alte->parent);
-		inode->num_exts++;
 	}
 
 	// check mergeability of the last extent added
@@ -689,13 +774,12 @@ void replace(struct inode *inode, struct extent* alts, struct extent *tail, size
 		    tail->off_do + tail->length == tail->next->off_do ) {
 			dp("   last ext is merged!!\n");
 			tail->length += tail->next->length;
-			remove_extent(tail->next, 1);
-			inode->num_exts--;
+			remove_extent(tail->next);
 		}
 	}
 }
 
-void remove_extent(struct extent *target, int unref) 
+void remove_extent(struct extent *target) 
 {
 	dp("removing extent %lx dep=%d, plr=[%lx,%lx,%lx], pn=[%lx,%lx]\n",(long)target,target->depth,(long)target->parent,(long)target->left,(long)target->right,(long)target->prev,(long)target->next );
 	// unlink target from prev-next list 
@@ -762,7 +846,7 @@ void remove_extent(struct extent *target, int unref)
 		rebe = target->parent;
 	}
 	rebalance(rebe);
-	release_extent(target,unref);
+	release_extent(target);
 }
 
 
@@ -797,198 +881,263 @@ struct extent *find_start_extent(struct inode *inode,size_t start){
 	return cur;
 }
 
-// flag = 1 mean include base_ino. 0 means exclude base_ino
+// flag = 1 mean include base_ino which also means its clone source. 0 means exclude base_ino, a simple read 
 int pado_read(struct inode *inode, int fd, int flag, size_t start, size_t end) 
 {
-	if( inode == NULL ) {
+/*	if( inode == NULL ) {
 		return -INVALID_INO;
-	}
+	}*/
+
+	uint32_t hid = 0;
+	loid_t loid = 0;
+
+	end = MIN(end, inode->size);
+
 	if( start >= end ) {
+		write(fd, &hid, sizeof(uint32_t));
+		write(fd, &loid, sizeof(loid_t));
 		return -INVALID_RANGE;
 	}
-	pthread_rwlock_rdlock(&inode->rwlock);
+
 	struct extent *cur = find_start_extent(inode, start);
 
-	uint32_t hid;
-	ino_t loid, bino;
-	size_t offset, length, dloc, bsize, diff;
+	ino_t bino = inode->base_ino;
+	size_t off_do, length, off_f, offset, next_off, diff;
 	int base_cloned = 0;
 
-	dloc = start;
-//	bsize = inode->base_size;
-	bsize = inode->size;
-	bino = inode->base_ino;
-	if( bino == 0 ) flag = 0;
+	offset = 0;
+	off_f = start;
+//	if( bino == 0 ) flag = 0;
 
-	while( cur && cur->off_f < end ) {
-		if( flag && dloc < cur->off_f ) {
-			// write hole with base object 
-			if( dloc < bsize ) {
-				hid = 0;
-				loid = bino;
-				offset = dloc;
-				length = MIN( cur->off_f, MIN(end, bsize) ) - dloc;
-				base_cloned = 1;
-			} else {	//write hole with zero file
-				hid = 1;
-				loid = 0;
-				offset = 0;
-				length = MIN(end, cur->off_f) - dloc;
-			}
-		} else {	//write data object
+	while( off_f < end ) {
+		next_off = cur ? MIN(end, cur->off_f) : end;
+		if( flag && off_f < next_off ) { // write hole with base object 
+			hid = 0;
+			loid = bino;
+			off_do = off_f;
+			length = next_off - off_f;
+			base_cloned = 1;
+		} else if( cur && cur->off_f < end ) { //flag=1, off_f >= next_off, since off_f < end, cur->off_f<=off_f<end
+			//current extent exists and is in the range, write it to list
 			hid = cur->dobj->addr.host_id;
 			loid = cur->dobj->addr.loid;
-			diff = MAX( dloc - cur->off_f , 0 );
-			offset = cur->off_do + diff;
-			length = MIN( end, cur->off_f + cur->length ) - dloc;
-			
+			diff = MAX( off_f - cur->off_f , 0 );
+			off_do = cur->off_do + diff;
+			length = MIN( end, cur->off_f + cur->length ) - off_f;
 			cur = cur->next;
+		} else {	// flag=0, no more extent in range. flag=1, 
+			break;
 		}
 		write(fd, &hid, sizeof(uint32_t));
-		write(fd, &loid, sizeof(ino_t));
+		write(fd, &loid, sizeof(loid_t));
 		write(fd, &offset, sizeof(size_t));
+		write(fd, &off_do, sizeof(size_t));
 		write(fd, &length, sizeof(size_t));
 
-		dloc += length;
-	}
-	if( flag && dloc < end && dloc < bsize) {
-		hid = 0;
-		loid = bino;
-		offset = dloc;
-		length = MIN( end, bsize ) - dloc;
-
-		write(fd, &hid, sizeof(uint32_t));
-		write(fd, &loid, sizeof(ino_t));
-		write(fd, &offset, sizeof(size_t));
-		write(fd, &length, sizeof(size_t));
+		off_f += length;
+		offset += length;
 	}
 
 	hid = 0;
 	loid = 0;
 	write(fd, &hid, sizeof(uint32_t));
-	write(fd, &loid, sizeof(ino_t));
+	write(fd, &loid, sizeof(loid_t));
 
-	clock_gettime(CLOCK_REALTIME_COARSE, &(inode->atime) );
-	pthread_rwlock_unlock(&inode->rwlock);
+	if(base_cloned) return -BASE_CLONED;
 
-	return (base_cloned) ? BASE_CLONED : SUCCESS;
+	return SUCCESS;
 }
 
-void pado_getinode(struct inode *inode, int fd) 
+int pado_getinode_meta(struct inode *inode, int fd) 
 {
-	dp("pado getinode ino = %ld\n",inode->ino);
-	pthread_rwlock_rdlock(&inode->rwlock);
+	char zeros[8] = {0,};
+	if( inode ) {
+		dp("pado getinode ino = %ld\n",inode->ino);
+		
+		write(fd, &inode->base_ino , sizeof(ino_t) );
+		write(fd, &inode->parent_ino , sizeof(ino_t) );
+		write(fd, &inode->size , sizeof(size_t) );
+//		write(fd, inode->name , FILE_NAME_SIZE );
 	
-	write(fd, &inode->ino , sizeof(ino_t) );
-	write(fd, &inode->mode , sizeof(mode_t) );
-	write(fd, &inode->uid , sizeof(uid_t) );
-	write(fd, &inode->gid , sizeof(gid_t) );
-	write(fd, &inode->size , sizeof(size_t) );
-	write(fd, &inode->atime.tv_sec , sizeof(time_t) );
-	write(fd, &inode->mtime.tv_sec , sizeof(time_t) );
-	write(fd, &inode->ctime.tv_sec , sizeof(time_t) );
-	write(fd, &inode->name , FILE_NAME_SIZE );
-	write(fd, &inode->parent_ino , sizeof(ino_t) );
-	write(fd, &inode->base_ino , sizeof(ino_t) );
-//	write(fd, &inode->base_size , sizeof(size_t) );
-	write(fd, &inode->is_shared , sizeof(uint8_t) );
-	pthread_rwlock_unlock(&inode->rwlock);
+		write(fd, &inode->mode , sizeof(mode_t) );
+		write(fd, &inode->uid , sizeof(uid_t) );
+		write(fd, &inode->gid , sizeof(gid_t) );
+		write(fd, &inode->atime.tv_sec , sizeof(time_t) );
+		write(fd, &inode->mtime.tv_sec , sizeof(time_t) );
+//		write(fd, &inode->ctime.tv_sec , sizeof(time_t) );
+		write(fd, &inode->flags , sizeof(uint8_t) );
+	} else {
+		write(fd, zeros, sizeof(ino_t));
+		write(fd, zeros, sizeof(ino_t));
+		write(fd, zeros, sizeof(size_t));
+//		write(fd, zeros, FILE_NAME_SIZE );
+		write(fd, zeros, sizeof(mode_t) );
+		write(fd, zeros, sizeof(uid_t) );
+		write(fd, zeros, sizeof(gid_t) );
+		write(fd, zeros, sizeof(time_t) );
+		write(fd, zeros, sizeof(time_t) );
+//		write(fd, zeros, sizeof(time_t) );
+		write(fd, zeros, sizeof(uint8_t) );
+		return -INVALID_INO;
+	}
+	return SUCCESS;
 }
 
-void pado_getinode_all(struct inode *inode, int fd) 
+int pado_getinode_all(struct inode *inode, int fd) 
 {
-	dp("pado getinodeall ino = %ld\n",inode->ino);
-	pthread_rwlock_rdlock(&inode->rwlock);
-	
-	pado_getinode(inode,fd);
+	struct extent *cur;
+	uint32_t num = 0;;
 
-	write(fd, &(inode->num_exts), sizeof(uint32_t));
-	
-	struct extent *cur = find_start_extent(inode, 0);
+	pado_getinode_meta(inode,fd);
 
-	while( cur ) {
-		write(fd, &(cur->dobj->addr.host_id), sizeof(uint32_t));
-		write(fd, &(cur->dobj->addr.loid), sizeof(ino_t));
-
-		write(fd, &(cur->off_f), sizeof(size_t));
-		write(fd, &(cur->off_do), sizeof(size_t));
-		write(fd, &(cur->length), sizeof(size_t));
-
-		cur = cur->next;
+	if( inode ) {
+		dp("pado getinodeall ino = %ld\n",inode->ino);
+		write(fd, &(inode->num_exts), sizeof(uint32_t));
+		cur = find_start_extent(inode, 0);
+		while( cur ) {
+			write(fd, &(cur->dobj->addr.host_id), sizeof(uint32_t));
+			write(fd, &(cur->dobj->addr.loid), sizeof(loid_t));
+			write(fd, &(cur->off_f), sizeof(size_t));
+			write(fd, &(cur->off_do), sizeof(size_t));
+			write(fd, &(cur->length), sizeof(size_t));
+			cur = cur->next;
+		}
+	} else {
+		write(fd, &num, sizeof(uint32_t));
+		return -INVALID_INO;
 	}
 
-	pthread_rwlock_unlock(&inode->rwlock);
+	return SUCCESS;
 }
 
 void do_backup(int fd) {
-	struct inode_hash_item *cur, *tmp;
+	struct inode *cur, *tmp;
 
 	dp("Backing up whole inodes. inodebase = %ld\n",inodebase);
 
-	pthread_mutex_lock(&ino_mut);
-	write(fd, &inodebase, sizeof(ino_t));
-	pthread_rwlock_rdlock(&imlock);
-	HASH_ITER(hh, inode_map, cur, tmp) {
-		pado_getinode_all(cur->value, fd);
+//	write(fd, &inodebase, sizeof(ino_t));
+
+	pthread_rwlock_rdlock(&imlock);			//grarantee to any inode is created of deleted
+	HASH_ITER(hh, inode_map, cur, tmp) {	//for all inodes, write whole inode to the fd
+		if( IS_DELETED(cur) ) continue;
+		pado_getinode_all(cur, fd);
 	}
 	pthread_rwlock_unlock(&imlock);
-	pthread_mutex_unlock(&ino_mut);
 }
 
 void stageout_all() {
-	struct inode_hash_item *cur, *tmp;
+	struct inode *cur, *tmp;
 
 	dp("Staging out all inodes\n");
 
-	pthread_mutex_lock(&ino_mut);
-	pthread_rwlock_rdlock(&imlock);
+	pthread_rwlock_wrlock(&imlock);
 	HASH_ITER(hh, inode_map, cur, tmp) {
-		stageout(cur->value);
+		stageout(cur);
 	}
 	pthread_rwlock_unlock(&imlock);
-	pthread_mutex_unlock(&ino_mut);
 }
 
 int stageout(struct inode *inode) {
-	dp("Staging out a inode %s(%ld)\n",inode->name,inode->ino);
-	struct dobject *cur, *tmp;
-	int numdos, i, ret = SUCCESS;
-	int *fds;
-	pthread_rwlock_wrlock( &inode->rwlock );
-	
-	numdos = HASH_COUNT( inode->do_map );
-	fds = calloc( sizeof(int), numdos );
-
-	HASH_ITER(hh, inode->do_map, cur, tmp) {
-		
-	// TODO: request date object server to migrate data to basefile
-	// dst doserver : hid 
-	// data to be migrated : use read_dobject to send list
-	// send 
-		pthread_mutex_lock( &(cur->reflock) );
-		remove_dobject( cur, 1, 0 );
+	if( inode == NULL ) {
+		return -INVALID_INO;
 	}
 
-	for(i = 0 ; i < numdos ; i++ ) {
+	dp("Staging out a inode %ld\n",inode->ino);
+	struct dobject *cur, *tmp;
+	int i, c, ret = SUCCESS, fail = 0;
+	struct sockaddr_in caddr;
+	int fds[MAX_CLI_SOCKET];
+	uint32_t hid;
+	loid_t loid;
+	unsigned char com;
+
+	caddr.sin_family = AF_INET;
+	caddr.sin_port = htons(DOS_ETH_PORT);
+
+	pthread_rwlock_wrlock( &inode->rwlock );
+
+//	if(inode->base_ino == 0 ) {
+		// TODO : create base file
+//	}
+	// copy real data to cloned files if this file is clone source
+	if( IS_SHARED(inode) ) {
+		caddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+		fds[0] = socket(AF_INET, SOCK_STREAM, 0);
+		if( connect(fds[0], (struct sockaddr *)&caddr, sizeof(caddr) ) < 0 ) {
+			pthread_rwlock_unlock( &inode->rwlock );
+			printf("[WARNING]Stageout of file %lu failed due to connection error during shared file draining\n", inode->ino);
+			return -DOS_CON_ERROR;
+		}
+		com = DRAIN_SHARED;
+
+		write(fds[0], &com, sizeof(com));
+		write(fds[0], &loid, sizeof(loid));
+
+		read(fds[0], &ret, sizeof(ret) );
+		close(fds[0] );
+		if( ret != SUCCESS ) {
+			pthread_rwlock_unlock( &inode->rwlock );
+			printf("[WARNING]Stageout of file %lu failed to draining share file\n", inode->ino);
+			return -DOS_FAIL;
+		}
+		UNSET_SHARED(inode);
+	}
+
+	c = 0;
+	com = DRAIN_DO;
+	HASH_ITER(hh, inode->do_map, cur, tmp) {	//fo all dataobject in this inode, drain data 
+		hid = cur->addr.host_id;
+		loid = cur->addr.loid;
+		caddr.sin_addr.s_addr = htons(hid);
+
+		fds[c] = socket(AF_INET, SOCK_STREAM, 0);
+		if( connect(fds[c], (struct sockaddr *)&caddr, sizeof(caddr) ) < 0 ) {
+			pthread_rwlock_unlock( &inode->rwlock );
+			printf("[WARNING]Stageout of file %lu failed due to connection error\n", inode->ino);
+			return -DOS_CON_ERROR;
+		}
+
+		write(fds[c], &com, sizeof(com));
+		write(fds[c], &loid, sizeof(loid));
+		read_dobject( cur, fds[c] );	//send mapping list on this data object
+
+		c++;
+		if( c == MAX_CLI_SOCKET ) {		//spwan draining processes in parallel and wait to complete 
+			for(i = 0 ; i < c ; i++ ) {
+				read( fds[i], &ret, sizeof(ret) );
+				close( fds[i] );
+				if( ret != SUCCESS ) fail++;
+			}
+			c = 0;
+		}
+	}
+
+	for(i = 0 ; i < c ; i++ ) {
 		read( fds[i], &ret, sizeof(ret) );
 		close( fds[i] );
+		if( ret != SUCCESS ) fail++;
 	}
 
+	SET_DELETED(inode);
 	pthread_rwlock_unlock( &inode->rwlock );
 
-	return release_inode(inode);
+	if( fail > 0 ) {
+		printf("[WARNING]Stageout of file %lu failed %c!!\n", inode->ino, fail);
+		return -DOS_FAIL;
+	}
+	return SUCCESS;
 }
 
 //#ifndef NODP
 void print_all() {
-	struct inode_hash_item *cur, *tmp;
+	struct inode *cur, *tmp;
 
 	dp("printing whole inodes. inodebase = %ld\n",inodebase);
 
 	pthread_mutex_lock(&ino_mut);
 	pthread_rwlock_rdlock(&imlock);
 	HASH_ITER(hh, inode_map, cur, tmp) {
-		print_inode(cur->value);
+		print_inode(cur);
 	}
 	pthread_rwlock_unlock(&imlock);
 	pthread_mutex_unlock(&ino_mut);
@@ -1091,6 +1240,23 @@ void rebalance(struct extent *ext) {
 		if( ext->depth == dep_ori ) break;
 		ext = ext->parent;
 	}
+}
+
+void check_dobject(struct dobject *dobj) {
+	uint32_t rc, wc;
+	struct extent *ref;
+	if( dobj == NULL ) return;
+
+	wc = dobj->num_refs;
+	rc = 0;
+	
+	ref = dobj->refs;
+
+	while(ref) {
+		rc++;
+		ref = ref->next_ref;
+	}
+	assert(wc == rc);
 }
 
 void check_extent(struct extent *ext, int p, int dur_rep)

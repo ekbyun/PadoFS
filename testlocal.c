@@ -16,14 +16,19 @@ int main(int argc, char **argv)
 
 	init_inode_container(0,0);
 
-	struct inode *inode = get_inode(1);
+	ino_t ino;
+	int ret;
+	struct inode *inode = acquire_inode(1);
 	if( inode == NULL ) 
-		inode = create_inode("test.txt",0,01755,0,11,20,21,1024);
-	dp("%s pino=%ld size=%ld, base_ino=%ld\n", inode->name, inode->ino, inode->size, inode->base_ino);
-	struct inode *inode2 = get_inode(2);
+	//	inode = create_inode("test.txt",0,01755,0,11,20,21,1024);
+		inode = create_inode(&ino,01755,0,11,20,21,1024,&ret);
+	inode = acquire_inode(1);
+//	dp("%s pino=%ld size=%ld, base_ino=%ld\n", inode->name, inode->ino, inode->size, inode->base_ino);
+	struct inode *inode2 = acquire_inode(2);
 	if( inode2 == NULL )
-		inode2 = create_inode("test2.txt",0,01755,0,12,20,21,512);
-	dp("%s pino=%ld size=%ld, base_ino=%ld\n", inode2->name, inode2->ino, inode2->size, inode2->base_ino);
+		inode2 = create_inode(&ino,01755,0,12,20,21,1024,&ret);
+	inode = acquire_inode(2);
+//	dp("%s pino=%ld size=%ld, base_ino=%ld\n", inode2->name, inode2->ino, inode2->size, inode2->base_ino);
 
 	struct dobject *dobj;
 
@@ -69,12 +74,12 @@ int main(int argc, char **argv)
 					break;
 				}
 				dp("writing do(hid=%d,loid=%ld) to offset= %ld, length= %ld ...\n",hid, loid,start, end-start); 
-				dobj= get_dobject(hid, loid, inode);
-				pado_write(inode, dobj, start, start, end-start);
+				dobj= acquire_dobject(hid, loid, inode, 1);
+				pado_write(dobj, start, start, end-start);
 				print_inode(inode);
 				break;
 			case 'R':	//read
-				ti = get_inode(loid);
+				ti = acquire_inode(loid);
 				if( ti == NULL ) {
 					dp("There is no inode with ino = %ld\n", loid);
 				} else {
@@ -97,7 +102,7 @@ int main(int argc, char **argv)
 				pado_truncate(inode, end);
 				print_inode(inode);
 				break;
-			case 'D':	//delete range
+	/*		case 'D':	//delete range
 				dp("delete range inode#%d, from %ld to %ld ...\n", hid, start,end);
 				if( hid == 1 ) {
 					ti = inode;
@@ -106,11 +111,11 @@ int main(int argc, char **argv)
 				}
 				pado_del_range(ti, start, end);
 				print_inode(ti);
-				break;
+				break;*/
 			default:
 				dp("INVALID COMMAND. com=%s\n",com);
 		}
-		read_dobject( get_dobject( 20,30, inode), 0);
+		read_dobject( acquire_dobject( 20,30, inode, 0), 0);
 	}
 	return 0;
 }

@@ -1,14 +1,3 @@
-#include<stdio.h>
-#include<stdlib.h>
-#include<unistd.h>
-#include<sys/types.h>
-#include<sys/socket.h>
-#include<sys/stat.h>
-#include<arpa/inet.h>
-#include<netinet/in.h>
-#include<sys/types.h>
-#include<sys/stat.h>
-#include<fcntl.h>
 #include"inserver.h"
 #include"incont.h"
 #include"uthash.h"
@@ -47,7 +36,7 @@ void usage() {
 	printf("                      If not set, start with an emtpy map\n");
 	printf("      -b [filepath] : filename with path to which mapping contents will be backuped when stopped.\n");
 	printf("                      default = " BACKUP_FILE_PATH "\n");
-	printf("      -n [nodeid]   : the node ID which will be used as the offset of inode number created in this server\n"); 
+	printf("      -m [MS addr]  : the address of mapping server in form of IPv4 string. (Default = " MS_ADDR_DEF ")\n"); 
 	printf("      -h            : print this message\n");
 	printf("  argument :\n");
 	printf("      address : IPv4 address print this message. can be ommitted and ignored when a -f option is given.\n");
@@ -64,11 +53,12 @@ int main(int argc, char **argv)
 	uint16_t port = DEFAULT_PORT;
 	char outfilename[1024] = BACKUP_FILE_PATH;
 	char infilename[1024] = {0,};
+	in_addr_t ms_addr = 0;
 	int infileexist = 0;
 	uint32_t nodeid = 0;
 	int i;
 
-	while( (c = getopt(argc, argv, "p:f:n:hb:" ))!= -1) {
+	while( (c = getopt(argc, argv, "p:f:m:hb:" ))!= -1) {
 		switch(c) {
 			case 'p':
 				port = atoi(optarg);
@@ -83,8 +73,8 @@ int main(int argc, char **argv)
 			case 'b':
 				strncpy(outfilename, optarg, strlen(optarg)+1);
 				break;
-			case 'n':
-				nodeid = atoi(optarg);
+			case 'm':
+				ms_addr = inet_addr(optarg);
 				break;
 			case 'h':
 				usage();
@@ -101,7 +91,9 @@ int main(int argc, char **argv)
 	printf("Initializing PADOFS inode server.....nodeid = %d(%s)\n",nodeid, argv[optind]);
 
 	int fd;
-	ino_t base;
+//	ino_t base;
+	init_inode_container(nodeid, ms_addr);
+
 	if( infileexist ) {
 		printf("Restoring inodes from the file %s\n",infilename);
 		//restore hash map from file 
@@ -109,17 +101,15 @@ int main(int argc, char **argv)
 		if(fd == -1) {
 			printf("The backup file does't exist. Starting with an empty map.\n"); 
 		} else {
-			read(fd, &base, sizeof(ino_t));
-			init_inode_container(nodeid, base);
+		//	read(fd, &base, sizeof(ino_t));
+		//	init_inode_container(nodeid, base);
 			do_restore(fd);
 			close(fd);
 		}
-	} else {
-		init_inode_container(nodeid,0);
+//	} else {
+//		init_inode_container(nodeid,0);
 	}
 	
-//	print_all();
-
 	int sockfd, clen;
 	struct sockaddr_in sa,ca;
 
@@ -264,14 +254,16 @@ void *worker_thread(void *arg) {
 
 	ino_t tino, pino, bino;
 	size_t off_f, off_do, len;
-	uint32_t hid;
-	ino_t loid;
+	uint32_t hid, num;
+	loid_t loid;
 	struct inode *tinode;
 	mode_t mode;
 	uid_t uid;
 	gid_t gid;
 	size_t size;
-	char name[FILE_NAME_SIZE];
+//	char name[FILE_NAME_SIZE];
+	uint8_t flags;
+	int free;
 
 #ifndef NODP
 	int tid;
@@ -307,21 +299,17 @@ void *worker_thread(void *arg) {
 
 		dp("[%d] fd = %d , com = %s\n", tid, fd, comstr[com]);
 
-		if( com != CREATE_INODE ) {
-			read(fd, &tino, sizeof(ino_t));
-			tinode = get_inode(tino);
-			if( tinode == NULL ) {
-				ret = -INVALID_INO;
-				write(fd, &ret, sizeof(ret));
-				dp("There is no inode with ino %ld\n", tino);
-				close(fd);
-				continue;
-			}
-		}
-
+		free = 0;
 		ret = SUCCESS;
 
-		// TODO : 
+		read(fd, &tino, sizeof(ino_t));
+		if( com != CREATE_INODE ) {
+			tinode = acquire_inode(tino);
+			if( tinode == NULL ) ret = -INVALID_INO;
+		} else {
+			tinode = NULL;
+		}
+
 		switch(com) {
 			case WRITE:
 				read(fd, &hid, sizeof(hid));
@@ -329,105 +317,300 @@ void *worker_thread(void *arg) {
 				read(fd, &off_f, sizeof(off_f));
 				read(fd, &off_do, sizeof(off_do));
 				read(fd, &len, sizeof(len));
-				ret = pado_write( tinode, get_dobject(hid, loid, tinode, 1), off_f, off_do, len); 
+				if( tinode ) {
+					pthread_rwlock_wrlock( &tinode->rwlock );
+					if( IS_DELETED(tinode) ) {
+						ret = -IS_DELETED;
+					} else {
+						ret = pado_write( acquire_dobject(hid, loid, tinode, 1), off_f, off_do, len);
+					}
+					pthread_rwlock_unlock( &tinode->rwlock );
+				}
 				break;
 			case TRUNCATE:
 				read(fd, &off_f, sizeof(off_f));
-				pado_truncate(tinode, off_f);
+				if( tinode ) {
+					pthread_rwlock_wrlock( &tinode->rwlock );
+					if( IS_DELETED(tinode) ) {
+						ret = -IS_DELETED;
+					} else {
+						ret = pado_truncate(tinode, off_f);
+					}
+					pthread_rwlock_unlock( &tinode->rwlock );
+				}
 				break;
 			case READ_LAYOUT:
 				read(fd, &off_f, sizeof(off_f));
 				read(fd, &len, sizeof(len));
-				ret = pado_read(tinode, fd, 0, off_f, off_f + len);
+				if( tinode ) {
+					pthread_rwlock_rdlock( &tinode->rwlock );
+					if( IS_DELETED(tinode) ) {
+						ret = -IS_DELETED;
+					} else {
+						ret = pado_read(tinode, fd, 0, off_f, off_f + len);
+					}
+					pthread_rwlock_unlock( &tinode->rwlock );
+				} else {
+					hid = 0;
+					loid = 0;
+					write(fd, &hid, sizeof(uint32_t));
+					write(fd, &loid, sizeof(loid_t));
+				}
 				break;
 			case CLONE_FROM:
 				read(fd, &off_f, sizeof(off_f));
 				read(fd, &len, sizeof(len));
-				ret = pado_read(tinode, fd, 1, off_f, off_f + len);
-				if( ret == BASE_CLONED ) {
-					ret = SUCCESS;
-					tinode->is_shared = 1;
+				if( tinode ) {
+					pthread_rwlock_rdlock( &tinode->rwlock );
+					if( IS_DELETED(tinode) ) {
+						ret = -IS_DELETED;
+					} else {
+						ret = pado_read(tinode, fd, 1, off_f, off_f + len);
+					}
+					pthread_rwlock_unlock( &tinode->rwlock );
+
+					if( ret == -BASE_CLONED ) {
+						pthread_rwlock_wrlock( &tinode->rwlock );
+						SET_SHARED(tinode);
+						pthread_rwlock_unlock( &tinode->rwlock );
+						ret = SUCCESS;
+					}
+				} else {
+					hid = 0;
+					loid = 0;
+					write(fd, &hid, sizeof(uint32_t));
+					write(fd, &loid, sizeof(loid_t));
 				}
 				break;
 			case CLONE_TO:
 				read(fd, &off_f, sizeof(off_f));
 				read(fd, &len, sizeof(len));
-				ret = pado_clone(tinode, fd, off_f, off_f + len);
+				if( tinode ) {
+					pthread_rwlock_wrlock( &tinode->rwlock );
+					if( IS_DELETED(tinode) ) {
+						ret = -IS_DELETED;
+					} else {
+						ret = pado_clone(tinode, fd, off_f, off_f + len);
+					}
+					pthread_rwlock_unlock( &tinode->rwlock );
+				}
 				break;
-			case DELETE_RANGE:
-				read(fd, &off_f, sizeof(off_f));	//start offset
-				read(fd, &len, sizeof(len));		//end offset
-				if( off_f >= len ) ret = -INVALID_RANGE;
-				else pado_del_range(tinode, off_f, len);
+			case READ_INODE_META:	
+				read(fd, &flags, sizeof(flags));
+				if( tinode && flags == 1 ) {	//increase refcount
+					pthread_rwlock_wrlock( &tinode->rwlock );
+					if( IS_DELETED(tinode) ) {
+						pado_getinode_meta(NULL, fd);
+						ret = -IS_DELETED;
+					} else {
+						tinode->refcount++;
+						ret = pado_getinode_meta(tinode, fd);
+					}
+					pthread_rwlock_unlock( &tinode->rwlock );
+				} else if( tinode && flags == 0 ) {
+					pthread_rwlock_rdlock( &tinode->rwlock );
+					if( IS_DELETED(tinode) ) {
+						pado_getinode_meta(NULL, fd);
+						ret = -IS_DELETED;
+					} else {
+						ret = pado_getinode_meta(tinode, fd);
+					}
+					pthread_rwlock_unlock( &tinode->rwlock );
+				} else if( tinode == NULL ) {
+					ret = pado_getinode_meta(tinode, fd);
+				}
 				break;
-			case GET_INODE:
-				pado_getinode(tinode, fd);
+			case READ_INODE_WHOLE:	
+				read(fd, &flags, sizeof(flags));
+				if( tinode && flags == 1 ) {	//increase refcount
+					pthread_rwlock_wrlock( &tinode->rwlock );
+					if( IS_DELETED(tinode) ) {
+						pado_getinode_all(NULL, fd);
+						ret = -IS_DELETED;
+					} else {
+						tinode->refcount++;
+						ret = pado_getinode_all(tinode, fd);
+					}
+					pthread_rwlock_wrlock( &tinode->rwlock );
+				} else if( tinode && flags == 0 ) {
+					pthread_rwlock_rdlock( &tinode->rwlock );
+					if( IS_DELETED(tinode) ) {
+						pado_getinode_all(NULL, fd);
+						ret = -IS_DELETED;
+					} else {
+						ret = pado_getinode_all(tinode, fd);
+					}
+					pthread_rwlock_unlock( &tinode->rwlock );
+				} else if( tinode == NULL ) {
+					ret = pado_getinode_all(tinode, fd);
+				}
 				break;
-			case GET_INODE_WHOLE:
-				pado_getinode_all(tinode, fd);
-				break;
-			case SET_INODE:
-				read(fd, &(tinode->mode), sizeof(mode_t));
-				read(fd, &(tinode->uid), sizeof(uid_t));
-				read(fd, &(tinode->gid), sizeof(gid_t));
-				read(fd, &(tinode->parent_ino), sizeof(ino_t));
-				read(fd, &(tinode->base_ino), sizeof(ino_t));
-				read(fd, tinode->name, FILE_NAME_SIZE);
-				clock_gettime(CLOCK_REALTIME_COARSE, &(tinode->ctime));
-				break;
-			case CREATE_INODE:
+			case SET_INODE:	
+				read(fd, &bino, sizeof(ino_t));
+				read(fd, &pino, sizeof(ino_t));
+				read(fd, &flags, sizeof(uint8_t));
 				read(fd, &mode, sizeof(mode_t));
 				read(fd, &uid, sizeof(uid_t));
 				read(fd, &gid, sizeof(gid_t));
-				read(fd, &pino, sizeof(ino_t));
-				read(fd, &bino, sizeof(ino_t));
-				read(fd, name, FILE_NAME_SIZE);
-				read(fd, &size, sizeof(size_t));
-				tinode = create_inode( name, 0, mode, pino, bino, uid, gid, size);
-				if( tinode == NULL ) {
-					ret = -CREATE_INODE_FAIL;
-					tino = 0;
-				} else {
-					tino = tinode->ino;
+			//	read(fd, name, FILE_NAME_SIZE);
+				if( tinode ) {
+					pthread_rwlock_wrlock(&tinode->rwlock);	//wring even on deleted inode
+					tinode->mode = mode;
+					tinode->uid = uid;
+					tinode->gid = gid;
+					tinode->parent_ino = pino;
+					tinode->base_ino = bino;
+					tinode->flags = flags;
+				//	memcpy( tinode->name, name, FILE_NAME_SIZE );
+					clock_gettime(CLOCK_REALTIME_COARSE, &(tinode->atime));
+					if( IS_DELETED(tinode) ) ret = -IS_DELETED;
+					pthread_rwlock_unlock(&tinode->rwlock);
 				}
-				write(fd, &tino, sizeof(ino_t));
-				break;
-			case RELEASE_INODE:
-				ret = release_inode(tinode);
 				break;
 			case READ_DOBJ:
 				read(fd, &hid, sizeof(hid));
 				read(fd, &loid, sizeof(loid));
-				write(fd, &(tinode->base_ino), sizeof(ino_t));
-				write(fd, &(tinode->is_shared), sizeof(uint8_t));
-				ret = read_dobject( get_dobject(hid, loid, tinode, 0), fd );
+				
+				num = 0;
+				if( tinode == NULL ) {
+					bino = 0;
+					size = 0;
+					write(fd, &bino, sizeof(bino));
+					write(fd, &size, sizeof(size));
+					write(fd, &num, sizeof(num));
+					ret = -INVALID_INO;
+				} else {
+					pthread_rwlock_rdlock( &tinode->rwlock );
+					
+					bino = tinode->base_ino;
+					size = tinode->size;
+					write(fd, &bino, sizeof(bino));
+					write(fd, &size, sizeof(size));
+
+					if ( IS_DELETED(tinode) ) {
+						write(fd, &num, sizeof(num));
+						ret = -IS_DELETED;
+					} else if ( IS_SHARED(tinode) ) {
+						write(fd, &num, sizeof(num));
+						ret = -SHARED_BASE;
+					} else if ( IS_DLOCKED(tinode) ) {
+						write(fd, &num, sizeof(num));
+						ret = -IS_DLOCKED;
+					} else {
+						ret = read_dobject( acquire_dobject(hid, loid, tinode, 0), fd );
+						SET_DLOCKED(tinode);
+					}
+
+					pthread_rwlock_unlock( &tinode->rwlock );
+				}
 				break;
-			case REMOVE_DOBJ:
+			case RELEASE_DRAIN_LOCK:
+				if ( tinode ) {
+					pthread_rwlock_wrlock( &tinode->rwlock );
+					UNSET_DLOCKED(tinode);
+				//	if( IS_DELETED(tinode) ) ret = -IS_DELETED;
+					pthread_rwlock_wrlock( &tinode->rwlock );
+				} else {
+					ret = -INVALID_INO;
+				}
+			case REMOVE_DOBJ:	
 				read(fd, &hid, sizeof(hid));
 				read(fd, &loid, sizeof(loid));
-				if( hid == 0 && loid == 0 ) {
-					ret = tinode->is_shared ? SUCCESS : -INVALID_DOBJECT;
-					tinode->is_shared = 0;
-				} else {
-					ret = remove_dobject( get_dobject(hid, loid, tinode, 0), 1, 0);
+				read(fd, &flags, sizeof(flags));
+				if( tinode ) {
+					pthread_rwlock_wrlock( &tinode->rwlock );
+					if( IS_DELETED(tinode) ) {
+						ret = -IS_DELETED;
+					} else {
+						if( hid == 0 && loid == 0 ) {
+							ret = IS_SHARED(tinode) ? SUCCESS : -INVALID_DOBJECT;
+							UNSET_SHARED(tinode);
+						} else {
+							ret = remove_dobject( acquire_dobject(hid, loid, tinode, 0), flags);
+						}
+						free = release_inode(tinode);
+					}
+					pthread_rwlock_unlock( &tinode->rwlock );
 				}
 				break;
 			case GET_INODE_DOBJ:
-				ret = get_inode_dobj(tinode, fd);
+				if( tinode ) {
+					pthread_rwlock_rdlock( &tinode->rwlock );
+					if( IS_DELETED(tinode) ) {
+						ret = -IS_DELETED;
+					} else {
+						ret = get_inode_dobj(tinode, fd);
+					}
+					pthread_rwlock_unlock( &tinode->rwlock );
+				} else {
+					num = 0;
+					write(fd, &num, sizeof(uint32_t));
+					ret = -INVALID_INO;
+				}
+				break;
+			case CREATE_INODE:
+				bino = tino;
+				read(fd, &pino, sizeof(ino_t));
+				read(fd, &size, sizeof(size_t));
+				read(fd, &mode, sizeof(mode_t));
+				read(fd, &uid, sizeof(uid_t));
+				read(fd, &gid, sizeof(gid_t));
+//				read(fd, name, FILE_NAME_SIZE);
+				tino = 0;
+				tinode = create_inode(/*name,*/ &tino, mode, pino, bino, uid, gid, size, &ret);
+				tinode = NULL;
+				write(fd, &tino, sizeof(ino_t));
 				break;
 			case DELETE_INODE:
-				ret = delete_inode(tinode);
+				if( tinode ) {
+					pthread_rwlock_wrlock( &tinode->rwlock );
+					if( IS_DELETED(tinode) ) {
+						ret = -IS_DELETED;
+					} else if ( tinode->refcount > 0 ) {
+						ret = -IS_USED;
+					} else {
+						free = delete_inode(tinode);
+					}
+					pthread_rwlock_unlock( &tinode->rwlock );
+				} else {
+					ret = -INVALID_INO;
+				}
 				break;
-			case STAGEOUT:
-				ret = stageout(tinode);
+			case UNREF:
+				if( tinode ) {
+					pthread_rwlock_wrlock( &tinode->rwlock );
+					if( IS_DELETED ) {
+						ret = -IS_DELETED;
+					} else {
+						tinode->refcount--;
+						if( tinode->refcount < 0 ) { 
+							ret = -INVALID_UNREF;
+							tinode->refcount = 0;
+						}
+						free = release_inode(tinode);
+					}
+					pthread_rwlock_unlock( &tinode->rwlock );
+				}
 				break;
+			default:
+				ret = -INVALID_COMMAND;
 		}
-		write(fd, &ret, sizeof(ret));
-		dp("return of command %s on file %s[%ld] is %s\n", comstr[com], tinode->name, tinode->ino, retstr[ABS(ret)]);
+
+		if(tinode) {
+			pthread_rwlock_unlock( &(tinode->alive) );
+		}
+
 #ifndef NODP
+		dp("return of command %s on file %ld is %s\n", comstr[com], tino, retstr[ABS(ret)]);
 		print_inode(tinode);
 #endif
+
+		write(fd, &ret, sizeof(ret));
 		close(fd);
+
+		if(tinode && free) {
+			free_inode(tinode);
+		}
 	}
 
 	dp("Thread #%d finished!\n",tid);
@@ -435,50 +618,56 @@ void *worker_thread(void *arg) {
 }
 
 void do_restore(int fd) {
-	char fname[FILE_NAME_SIZE];
+//	char fname[FILE_NAME_SIZE];
 	unsigned short mode;
-	ino_t ino, pino, bino, loid;
+	ino_t ino = 0;
+	ino_t pino, bino;
+	loid_t loid;
 	unsigned int uid, gid;
-	size_t size, /*bsize,*/ off_f, off_do, len;
-	time_t at,mt,ct;
+	size_t size, off_f, off_do, len;
+	time_t at,mt/*,ct*/;
 	uint32_t ne, hid;
-	uint8_t is_shared;
+	uint8_t flags;
 	struct inode *inode;
-	struct dobject *dobj;
-	int i;
+	int i, ret;
 
 	dp("Restoring inode map\n");
-	while( read(fd, &ino, sizeof(ino_t)) ) 
+//	while( read(fd, &ino, sizeof(ino_t)) ) 
+	while( read(fd, &bino, sizeof(ino_t)) );
 	{
+		read(fd, &pino, sizeof(ino_t));
+		read(fd, &size, sizeof(size_t));
+//		read(fd, fname, FILE_NAME_SIZE);
 		read(fd, &mode, sizeof(mode_t));
 		read(fd, &uid, sizeof(uid_t));
 		read(fd, &gid, sizeof(gid_t));
-		read(fd, &size, sizeof(size_t));
 		read(fd, &at, sizeof(time_t));
 		read(fd, &mt, sizeof(time_t));
-		read(fd, &ct, sizeof(time_t));
-		read(fd, fname, FILE_NAME_SIZE);
-		read(fd, &pino, sizeof(ino_t));
-		read(fd, &bino, sizeof(ino_t));
-	//	read(fd, &bsize, sizeof(size_t));
-		read(fd, &is_shared, sizeof(uint8_t));
+//		read(fd, &ct, sizeof(time_t));
+		read(fd, &flags, sizeof(uint8_t));
 
-		inode = create_inode(fname, ino, mode, pino, bino, uid, gid, size);
-		
+//		inode = create_inode(fname, &ino, mode, pino, bino, uid, gid, size);
+		inode = create_inode(&ino, mode, pino, bino, uid, gid, size, &ret);
+		if( inode ) {
+			inode->flags = flags;
+			inode->atime.tv_sec = at;
+			inode->mtime.tv_sec = mt;
+//			inode->ctime.tv_sec = ct;
+			inode->refcount = 0;
+		} else if( ret != SUCCESS ) {
+			dp("Restoring inode for linode #%lu failed due to %s\n", bino, retstr[ABS(ret)]);
+		}
+
 		read(fd, &ne, sizeof(uint32_t));
-
 		for(i = 0 ; i < ne ; i++) {
 			read(fd, &hid, sizeof(uint32_t));
-			read(fd, &loid, sizeof(ino_t));
+			read(fd, &loid, sizeof(loid_t));
 			read(fd, &off_f, sizeof(size_t));
 			read(fd, &off_do, sizeof(size_t));
 			read(fd, &len, sizeof(size_t));
 
-			dobj = get_dobject(hid, loid, inode, 1);
-			pado_write(inode, dobj, off_f, off_do, len);
+			pado_write(acquire_dobject(hid, loid, inode, 1), off_f, off_do, len);
 		}
-
-		set_inode_aux(inode, at, mt, ct, /* bsize,*/ is_shared);
 #ifndef NODP
 		print_inode(inode);
 #endif

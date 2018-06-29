@@ -8,8 +8,8 @@
 #include"errno.h"
 #include"test.h"
 
-#define NUM_COM	1000
-#define NUM_INODE 2
+#define NUM_COM	10
+#define NUM_INODE 1
 
 int main(int argc, char **argv) 
 {
@@ -40,10 +40,13 @@ int main(int argc, char **argv)
 	ino_t tinos[NUM_INODE];
 
 	char ci[4] = "W";
-	uint32_t hid;
-	ino_t loid;
+	uint32_t hid, lhid[2];
+	loid_t loid;
 	size_t start, end;
 	
+	lhid[0] = ntohl(inet_addr("127.0.0.1"));
+	lhid[1] = ntohl(inet_addr("192.168.0.7"));
+
 	tinos[0] = 504588700852682753;
 	tinos[1] = 504588700852682754;
 //	/*	
@@ -61,16 +64,16 @@ int main(int argc, char **argv)
 		if( connect(sockfd, (struct sockaddr *)&clientaddr, client_len) < 0 ) {
 			exit(0);
 		}
-		bino = i + 100;
+		bino = i+100;
 		uid++;
 		gid++;
 		write(sockfd, &com, sizeof(com));
+		write(sockfd, &pino, sizeof(pino));
 		write(sockfd, &mode, sizeof(mode));
 		write(sockfd, &uid, sizeof(uid));
 		write(sockfd, &gid, sizeof(gid));
-		write(sockfd, &pino, sizeof(pino));
 		write(sockfd, &bino, sizeof(bino));
-		write(sockfd, name, FILE_NAME_SIZE);
+//		write(sockfd, name, FILE_NAME_SIZE);
 		write(sockfd, &size, sizeof(size));
 
 		read(sockfd,&ret,sizeof(ret));
@@ -79,14 +82,15 @@ int main(int argc, char **argv)
 		} else if ( ret == QUEUED ) {
 			read(sockfd,&(tinos[i]),sizeof(ino_t));
 			read(sockfd,&ret,sizeof(ret));
-			if( ret < 0 ) {
+			if( ret < 0 && ret != -ALREADY_CREATED ) {
 				fail++;
 			}
 		}
-		printf("create inode %s is done. ino = %ld,  ret = %s\n", name, tinos[i], retstr[ABS(ret)]);
+//		printf("create inode %s is done. ino = %ld,  ret = %s\n", name, tinos[i], retstr[ABS(ret)]);
+		printf("create inode %ld returns %s\n", tinos[i], retstr[ABS(ret)]);
 		close(sockfd);
 	}
-	if( fail > 0 ) exit(0);
+	if( fail >= 0 ) exit(0);
 //	*/
 	for(i = 0; i < NUM_COM; i++) {
 	/*
@@ -100,8 +104,10 @@ int main(int argc, char **argv)
 			continue;
 	*/
 		com = WRITE;
-		hid = rand() % 5;
-		loid = rand() % 32;
+		hid = lhid[i%2];
+//		hid = rand() % 5;
+//		loid = rand() % 8;
+		loid = 2;
 		start = rand() % 10000;
 		end = 10 + rand()%1000;
 
@@ -157,8 +163,8 @@ int main(int argc, char **argv)
 	connect(sockfd, (struct sockaddr *)&clientaddr, client_len);
 	com = READ_DOBJ;
 	tino = tinos[0];
-	hid = 3;
-	loid = 26;
+	hid = lhid[0];
+	loid = 2;
 	size_t base_ino;
 	uint8_t shared;
 
