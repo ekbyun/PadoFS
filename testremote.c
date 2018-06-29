@@ -9,7 +9,7 @@
 #include"test.h"
 
 #define NUM_COM	10
-#define NUM_INODE 1
+#define NUM_INODE 2
 
 int main(int argc, char **argv) 
 {
@@ -68,13 +68,13 @@ int main(int argc, char **argv)
 		uid++;
 		gid++;
 		write(sockfd, &com, sizeof(com));
+		write(sockfd, &bino, sizeof(bino));
 		write(sockfd, &pino, sizeof(pino));
+		write(sockfd, &size, sizeof(size));
 		write(sockfd, &mode, sizeof(mode));
 		write(sockfd, &uid, sizeof(uid));
 		write(sockfd, &gid, sizeof(gid));
-		write(sockfd, &bino, sizeof(bino));
 //		write(sockfd, name, FILE_NAME_SIZE);
-		write(sockfd, &size, sizeof(size));
 
 		read(sockfd,&ret,sizeof(ret));
 		if(	 ret == SERVER_BUSY ) {

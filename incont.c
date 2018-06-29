@@ -11,8 +11,6 @@ pthread_mutex_t ino_mut = PTHREAD_MUTEX_INITIALIZER;
 struct inode *inode_map = NULL;
 pthread_rwlock_t imlock = PTHREAD_RWLOCK_INITIALIZER;
 
-struct inode *cached_inode = NULL;
-
 in_addr_t ms_addr_base;
 
 void init_inode_container(uint32_t nodeid, in_addr_t ms_addr/*ino_t base*/) {
@@ -40,72 +38,56 @@ void get_ms_addr(struct sockaddr_in *addr, ino_t lino){
 struct inode *create_inode(/*const char *name,*/ ino_t *ino, mode_t mode, ino_t pino, ino_t bino, 
                            uid_t uid, gid_t gid, size_t size, int *ret) 
 {
-	struct inode *new_inode;
-	// obtain memory for new inode, reuse cache is used 
-	if( cached_inode ) {
-		new_inode = cached_inode;
-	} else {
-		new_inode = calloc(1, sizeof(struct inode));
-		if( new_inode == NULL ) {
-			*ret = -INTERNAL_ERROR;
-			return NULL;
-		}
-		pthread_rwlock_init(&new_inode->alive, NULL);
-		pthread_rwlock_init(&new_inode->rwlock, NULL);
-		new_inode->flags = 0;
-		new_inode->do_map = NULL;
-		new_inode->flayout = NULL;	
-		new_inode->num_exts = 0;
- 		new_inode->refcount = 1;
-	}
-	
-	pthread_mutex_lock(&ino_mut);
-	if( inodebase == inodemax ) {
-		dp("No more ino in this server\n");
-		*ret = -INO_FULL;
-		pthread_mutex_unlock(&ino_mut);
+	struct inode *new_inode = calloc(1, sizeof(struct inode));
+	if( new_inode == NULL ) {
+		*ret = -INTERNAL_ERROR;
 		return NULL;
 	}
-	new_inode->ino = inodebase++;
-	pthread_mutex_unlock(&ino_mut);
-
-	dp("Creating inode ino = %lu for bino = %lu....", new_inode->ino, new_inode->base_ino);
 
 	new_inode->parent_ino = pino;
 	new_inode->base_ino = bino;
 	new_inode->size = size;
 
-//	strncpy(new_inode->name, name, FILE_NAME_SIZE);
 	new_inode->mode = mode;
 	new_inode->uid = uid;
 	new_inode->gid = gid;
 
-//	clock_gettime(CLOCK_REALTIME, &(new_inode->ctime) );
-//	new_inode->atime.tv_sec = new_inode->ctime.tv_sec;
-//	new_inode->mtime.tv_sec = new_inode->ctime.tv_sec;
+	pthread_rwlock_init(&new_inode->alive, NULL);
+	pthread_rwlock_init(&new_inode->rwlock, NULL);
+	new_inode->flags = 0;
+	new_inode->do_map = NULL;
+	new_inode->flayout = NULL;	
+	new_inode->num_exts = 0;
+	new_inode->refcount = 1;
 
-	//register to inode map of this server
 	pthread_rwlock_wrlock(&imlock);
-	if( cached_inode ) {
-		HASH_DELETE(hh, inode_map, cached_inode);
-		cached_inode = NULL;
-	}
-	HASH_ADD_KEYPTR(hh, inode_map, &(new_inode->ino), sizeof(ino_t), new_inode);
-	pthread_rwlock_unlock(&imlock);
-
-	//	try to register to mapping server
+	//	try to connect to mapping server
 	struct sockaddr_in msaddr;
 	int sockfd;
 	unsigned char com = 'P';
 	get_ms_addr(&msaddr, bino);
-	
 	sockfd = socket(AF_INET, SOCK_STREAM, 0);
 	if( connect(sockfd, (struct sockaddr *)&msaddr, sizeof(msaddr)) < 0 ) {
 		*ret = -MS_CON_ERROR;
-		dp("failed to connect to mapping server\n");
-		cached_inode = new_inode;
+		dp("Creating inode ino = %lu for bino = %lu....failed. MS_CON_ERROR\n", new_inode->ino, bino);
+		close(sockfd);
+		free(new_inode);
+		pthread_rwlock_unlock(&imlock);
 		return NULL;
 	}
+
+	// get new ino
+	if( inodebase == inodemax ) {
+		dp("No more ino in this server\n");
+		*ret = -INO_FULL;
+		close(sockfd);
+		free(new_inode);
+		pthread_rwlock_unlock(&imlock);
+		return NULL;
+	}
+	new_inode->ino = inodebase;
+
+	// try to register in mapserver. if already exist, previous ino is returned
 	write(sockfd, &com, sizeof(com));
 	write(sockfd, &bino, sizeof(ino_t));
 	write(sockfd, &new_inode->ino, sizeof(ino_t));
@@ -113,12 +95,19 @@ struct inode *create_inode(/*const char *name,*/ ino_t *ino, mode_t mode, ino_t 
 	close(sockfd);
 	if( *ino != new_inode->ino ) {
 		*ret = ALREADY_CREATED;
-		cached_inode = new_inode;
-		dp("failed because the inode for base_ino %lu is already created\n", bino);
+		free(new_inode);
+		dp("Creating inode ino = %lu for bino = %lu....failed. ALREADY_CREATED\n", new_inode->ino, bino);
+		pthread_rwlock_unlock(&imlock);
 		return NULL;
 	}
 
-	dp("success\n");
+	inodebase++;
+	// insert to the inode hash-map in this server
+	HASH_ADD_KEYPTR(hh, inode_map, &(new_inode->ino), sizeof(ino_t), new_inode);
+	dp(".(inode_map size=%d)....\n", HASH_COUNT(inode_map) );
+	pthread_rwlock_unlock(&imlock);
+
+	dp("Creating inode ino = %lu for bino = %lu....success\n", new_inode->ino, bino);
 	return new_inode;
 }
 

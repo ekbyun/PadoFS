@@ -14,6 +14,7 @@ void print_inode(struct inode *inode) {
 	size_t min = 0, max = 0;
 	if( inode == NULL ) {
 		dp("print_inode fail. input inode is NULL\n");
+		return;
 	}
 	pthread_rwlock_rdlock(&inode->rwlock);
 //	dp("printing inode %s, ino=%lu, mode=%o, uid/gid=%d/%d, flag=%x\n",inode->name, inode->ino, inode->mode,inode->uid, inode->gid, inode->flag);
