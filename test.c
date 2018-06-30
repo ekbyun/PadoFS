@@ -18,7 +18,7 @@ void print_inode(struct inode *inode) {
 	}
 	pthread_rwlock_rdlock(&inode->rwlock);
 //	dp("printing inode %s, ino=%lu, mode=%o, uid/gid=%d/%d, flag=%x\n",inode->name, inode->ino, inode->mode,inode->uid, inode->gid, inode->flag);
-	dp("printing inode #%lu, mode=%o, uid/gid=%d/%d, flag=%x\n",inode->ino, inode->mode,inode->uid, inode->gid, inode->flags);
+	dp("printing inode #%lu, mode=%o, uid/gid=%d/%d, flag=%x num_exts=%u refc=%d\n",inode->ino, inode->mode,inode->uid, inode->gid, inode->flags, inode->num_exts, inode->refcount);
 	print_extent( find_start_extent(inode, 0) , 0, inode->num_exts);			
 	check_bst(inode->flayout, &max, &min); 
 	if( inode->flayout) assert(inode->size >= max);

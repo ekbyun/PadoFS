@@ -480,24 +480,21 @@ void *worker_thread(void *arg) {
 					write(fd, &num, sizeof(num));
 					ret = -INVALID_INO;
 				} else {
-					pthread_rwlock_rdlock( &tinode->rwlock );
+					pthread_rwlock_wrlock( &tinode->rwlock );
 					
 					bino = tinode->base_ino;
 					size = tinode->size;
 					write(fd, &bino, sizeof(bino));
 					write(fd, &size, sizeof(size));
 
+					ret = read_dobject( acquire_dobject(hid, loid, tinode, 0), fd );
 					if ( IS_DELETED(tinode) ) {
-						write(fd, &num, sizeof(num));
 						ret = -IS_DELETED;
 					} else if ( IS_SHARED(tinode) ) {
-						write(fd, &num, sizeof(num));
 						ret = -SHARED_BASE;
 					} else if ( IS_DLOCKED(tinode) ) {
-						write(fd, &num, sizeof(num));
 						ret = -IS_DLOCKED;
 					} else {
-						ret = read_dobject( acquire_dobject(hid, loid, tinode, 0), fd );
 						SET_DLOCKED(tinode);
 					}
 
@@ -507,16 +504,18 @@ void *worker_thread(void *arg) {
 			case RELEASE_DRAIN_LOCK:
 				if ( tinode ) {
 					pthread_rwlock_wrlock( &tinode->rwlock );
+					dp("acquire write lock for release drain lock tino=%lu\n",tino);
 					UNSET_DLOCKED(tinode);
-				//	if( IS_DELETED(tinode) ) ret = -IS_DELETED;
-					pthread_rwlock_wrlock( &tinode->rwlock );
+					if( IS_DELETED(tinode) ) ret = -IS_DELETED;
+					pthread_rwlock_unlock( &tinode->rwlock );
 				} else {
 					ret = -INVALID_INO;
 				}
+				break;
 			case REMOVE_DOBJ:	
 				read(fd, &hid, sizeof(hid));
 				read(fd, &loid, sizeof(loid));
-				read(fd, &flags, sizeof(flags));
+				read(fd, &flags, sizeof(flags));	//flag for unlink
 				if( tinode ) {
 					pthread_rwlock_wrlock( &tinode->rwlock );
 					if( IS_DELETED(tinode) ) {
@@ -579,7 +578,7 @@ void *worker_thread(void *arg) {
 			case UNREF:
 				if( tinode ) {
 					pthread_rwlock_wrlock( &tinode->rwlock );
-					if( IS_DELETED ) {
+					if( IS_DELETED(tinode) ) {
 						ret = -IS_DELETED;
 					} else {
 						tinode->refcount--;
@@ -596,17 +595,17 @@ void *worker_thread(void *arg) {
 				ret = -INVALID_COMMAND;
 		}
 
-		if(tinode) {
-			pthread_rwlock_unlock( &(tinode->alive) );
-		}
-
 #ifndef NODP
 		dp("return of command %s on file %ld is %s\n", comstr[com], tino, retstr[ABS(ret)]);
-		print_inode(tinode);
+		if( com != CREATE_INODE ) print_inode(tinode);
 #endif
 
 		write(fd, &ret, sizeof(ret));
 		close(fd);
+
+		if(tinode) {
+			pthread_rwlock_unlock( &(tinode->alive) );
+		}
 
 		if(tinode && free) {
 			free_inode(tinode);

@@ -94,7 +94,7 @@ struct inode *create_inode(/*const char *name,*/ ino_t *ino, mode_t mode, ino_t 
 	read(sockfd, ino, sizeof(ino_t));
 	close(sockfd);
 	if( *ino != new_inode->ino ) {
-		*ret = ALREADY_CREATED;
+		*ret = -ALREADY_CREATED;
 		free(new_inode);
 		dp("Creating inode ino = %lu for bino = %lu....failed. ALREADY_CREATED\n", new_inode->ino, bino);
 		pthread_rwlock_unlock(&imlock);
@@ -127,9 +127,14 @@ struct inode *acquire_inode(ino_t ino) {
 }
 
 void free_inode(struct inode *inode) {
+#ifndef NDEBUG
+	ino_t ino = inode->ino;
+#endif
+	dp("Releasing inode %lu\n",ino);
 	pthread_rwlock_wrlock(&imlock); 
 	HASH_DELETE(hh, inode_map, inode);
 	pthread_rwlock_unlock(&imlock);
+	dp(" inode %lu is removed from inode-map\n",ino);
 
 	pthread_rwlock_wrlock(&inode->alive); 
 	assert(inode->flayout == NULL);
@@ -140,6 +145,7 @@ void free_inode(struct inode *inode) {
 	
 	pthread_rwlock_destroy(&inode->alive);
 	free(inode);	
+	dp(" inode %lu is freed!\n",ino);
 }
 
 // enter this functing with wrlock( rwlock ) acquired and rdlock( alive ) acquired 
@@ -250,7 +256,7 @@ struct extent *create_extent(struct dobject *dobj, size_t off_f, size_t off_do, 
 	return newone;
 }
 
-void release_extent(struct extent *target) 
+void release_extent(struct extent *target, int triggered ) 
 {
 	dp("releasing extent %lx, pn=[%lx,%lx]\n",(long)target,(long)target->prev_ref,(long)target->next_ref );
 	struct dobject *dobj = NULL;
@@ -276,7 +282,7 @@ void release_extent(struct extent *target)
 	// need pooling
 	free(target);
 	
-	if( dobj ) {
+	if( dobj && triggered ) {
 		dp(" trigger removing_dobject %lx\n",(long)dobj);
 		remove_dobject(dobj, 1); 
 	}
@@ -316,7 +322,7 @@ void replace_extent(struct extent *orie, struct extent *newe)
 		newe->right->pivot = &(newe->right);
 	}
 
-	release_extent(orie);
+	release_extent(orie, 1);
 
 #ifndef NDEBUG
 	check_extent(newe,1,1);
@@ -340,7 +346,7 @@ struct dobject *acquire_dobject(uint32_t host_id, loid_t loid, struct inode *ino
 
 	struct sockaddr_in caddr;
 	int fd, ret;
-	unsigned char com = DRAIN_SHARED;
+	unsigned char com = ADD_LINK;
 
 	HASH_FIND(hh, inode->do_map, &addr, sizeof(struct do_addr), res);
 
@@ -394,28 +400,30 @@ int remove_dobject(struct dobject *dobj, /*int force, */int unlink)
 	if( dobj == NULL ) {
 		return -INVALID_DOBJECT;
 	}
-	dp("removing dobject %lx, h=%d l=%ld p=%ld \n",(long)dobj,dobj->addr.host_id,dobj->addr.loid,dobj->inode->ino);
+	dp("removing dobject %lx, h=%u l=%lu p=%lu \n",(long)dobj,dobj->addr.host_id,dobj->addr.loid,dobj->inode->ino);
 
 	HASH_DELETE(hh, dobj->inode->do_map, dobj);
 	
 	while( dobj->refs ) {
 		dp(" removing extent %lx force!!\n",(long)dobj->refs);
-		remove_extent(dobj->refs);
+		remove_extent(dobj->refs, 0);
 	}
 
 	struct sockaddr_in caddr;
 	int fd, ret = SUCCESS;
-	unsigned char com = ADD_LINK;
+	unsigned char com = REMOVE_LINK;
 	if( unlink ) {
 		caddr.sin_family = AF_INET;
 		caddr.sin_port = htons(DOS_ETH_PORT);
 		caddr.sin_addr.s_addr = dobj->addr.host_id;
 
 		fd = socket(AF_INET, SOCK_STREAM, 0);
+		dp("connecting to DOS h=%u\n",dobj->addr.host_id);
 		if( connect(fd, (struct sockaddr *)&caddr, sizeof(caddr) ) < 0 ) {
 			perror("ref link fail:");
 			ret = FAILED;
 		} else { 
+			dp("connected to DOS h=%u\n",dobj->addr.host_id);
 			write(fd, &com, sizeof(com));
 			write(fd, &dobj->addr.loid, sizeof(loid_t));
 			write(fd, &dobj->inode->ino, sizeof(ino_t));
@@ -681,7 +689,7 @@ void replace(struct inode *inode, struct extent* alts, struct extent *tail, size
 		if( alts == tail ) tail = tor;
 		alte = alts;
 		alts = alts->next;
-		release_extent(alte);
+		release_extent(alte, 1);
 	}
 
 	// delete or replace existing extents within the range
@@ -712,7 +720,7 @@ void replace(struct inode *inode, struct extent* alts, struct extent *tail, size
 			replace_extent(dh, alte);
 			tor = alte;
 		} else {
-			remove_extent(dh);
+			remove_extent(dh, 1);
 		}
 		dh = dnext;
 	}
@@ -763,12 +771,12 @@ void replace(struct inode *inode, struct extent* alts, struct extent *tail, size
 		    tail->off_do + tail->length == tail->next->off_do ) {
 			dp("   last ext is merged!!\n");
 			tail->length += tail->next->length;
-			remove_extent(tail->next);
+			remove_extent(tail->next, 1);
 		}
 	}
 }
 
-void remove_extent(struct extent *target) 
+void remove_extent(struct extent *target, int triggered) 
 {
 	dp("removing extent %lx dep=%d, plr=[%lx,%lx,%lx], pn=[%lx,%lx]\n",(long)target,target->depth,(long)target->parent,(long)target->left,(long)target->right,(long)target->prev,(long)target->next );
 	// unlink target from prev-next list 
@@ -835,7 +843,7 @@ void remove_extent(struct extent *target)
 		rebe = target->parent;
 	}
 	rebalance(rebe);
-	release_extent(target);
+	release_extent(target, triggered);
 }
 
 
@@ -1077,7 +1085,7 @@ int stageout(struct inode *inode) {
 	HASH_ITER(hh, inode->do_map, cur, tmp) {	//fo all dataobject in this inode, drain data 
 		hid = cur->addr.host_id;
 		loid = cur->addr.loid;
-		caddr.sin_addr.s_addr = htons(hid);
+		caddr.sin_addr.s_addr = hid;
 
 		fds[c] = socket(AF_INET, SOCK_STREAM, 0);
 		if( connect(fds[c], (struct sockaddr *)&caddr, sizeof(caddr) ) < 0 ) {

@@ -4,10 +4,11 @@
 char *dcomst[] = {
     "CREATE_BASEFILE",
 	"READ_DATA",
-	"MIGRATE_DO",
-	"MIGRATE_LSHARED",
+	"DRAIN_DO",
+	"DRAIN_LSHARED",
 	"ADD_LINK",
-	"REMOVE_LINK"
+	"REMOVE_LINK",
+	"MOVE_SHARED_BASE",
 };
 
 char *retst[] = {

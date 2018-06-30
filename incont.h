@@ -109,7 +109,7 @@ struct inode {	//type may need to be changed defined in kernel /include/linux/ty
 
 	struct extent *flayout;
 	uint32_t num_exts;
-	uint32_t refcount;
+	int32_t refcount;
 
 	struct dobject *do_map;
 //	pthread_rwlock_t dmlock;	//lock for dobject hash-map
@@ -135,10 +135,10 @@ struct inode *create_inode(/*const char *, */ino_t *, mode_t, ino_t, ino_t,uid_t
 int get_inode_dobj(struct inode *,int);
 
 struct extent *create_extent(struct dobject *,size_t,size_t,size_t);
-void release_extent(struct extent *);		//remove extent from ref list of dobject and free memory
+void release_extent(struct extent *,int);		//remove extent from ref list of dobject and free memory
 void insert_extent_list(struct extent *,struct extent *,struct extent *);
 void replace_extent(struct extent *,struct extent *);
-void remove_extent(struct extent *);		//remove extent from flayout
+void remove_extent(struct extent *,int);		//remove extent from flayout
 
 struct dobject *acquire_dobject(uint32_t, loid_t, struct inode *, int);
 int remove_dobject(struct dobject *, /*int,*/ int);
