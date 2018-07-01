@@ -60,7 +60,7 @@ int main(int argc, char **argv) {
 	
 	unsigned char com;
 	ino_t loid;
-	ino_t pino;
+	ino_t pino,bino;
 
 	while(1) {
 		fd = accept(sockfd, (struct sockaddr *)&ca, (socklen_t *)&clen);
@@ -68,9 +68,10 @@ int main(int argc, char **argv) {
 		read(fd, &com, sizeof(com));
 		read(fd, &loid, sizeof(loid));
 		read(fd, &pino, sizeof(loid));
+		read(fd, &pino, sizeof(loid));
 		write(fd, &ret, sizeof(ret));
 
-		printf("com=%s ,loid=%lu ,pino=%lu--> %s(%d)\n", dcomst[com],loid,pino,retst[ret],ret);
+		printf("com=%s ,loid=%lu ,pino=%lu ,bino=%lu--> %s(%d)\n", dcomst[com],loid,pino,bino,retst[ret],ret);
 
 		close(fd);
 	} 
