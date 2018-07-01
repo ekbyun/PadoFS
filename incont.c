@@ -378,7 +378,8 @@ struct dobject *acquire_dobject(uint32_t host_id, loid_t loid, struct inode *ino
 			}  
 			write(fd, &com, sizeof(com));
 			write(fd, &loid, sizeof(loid));
-			write(fd, &inode->ino, sizeof(loid));
+			write(fd, &inode->ino, sizeof(ino_t));
+			write(fd, &inode->base_ino, sizeof(ino_t));
 			read(fd, &ret, sizeof(ret) );
 			close(fd);
 		}
