@@ -63,7 +63,7 @@ int main(int argc, char **argv)
 	uint8_t _flags;
 	uint32_t _hid;
 
-	ino_t pino = 10, bino;
+	ino_t pino = 10, bino, binos[NUM_INODE];
 	mode_t mode = 0666;
 	uid_t uid = 7;
 	gid_t gid = 17;
@@ -77,6 +77,7 @@ int main(int argc, char **argv)
 			continue;
 		}
 		bino = i+100;
+		binos[i] = bino;
 		uid++;
 		gid++;
 		write(sockfd, &com, sizeof(com));
@@ -152,7 +153,7 @@ int main(int argc, char **argv)
 
 
 	for(i = 0; i < NUM_COM; i++) {
-		if( argc > 3 && argv[1][0] == 'i' ) { 
+		if( argc > 3 && argv[3][0] == 'i' ) { 
 			scanf("%s %d %ld %ld %ld",ci,&hid,&loid,&start,&end);
 
 			if( ci[0] == '#' ) continue;
@@ -226,6 +227,7 @@ int main(int argc, char **argv)
 	connect(sockfd, (struct sockaddr *)&clientaddr, client_len);
 	com = GET_INODE_DOBJ;
 	tino = tinos[0];
+	bino = binos[0];
 
 	write(sockfd, &com, sizeof(com));
 	write(sockfd, &tino, sizeof(tino));
@@ -254,6 +256,7 @@ int main(int argc, char **argv)
 		write(sockfd, &tino, sizeof(tino));
 		write(sockfd, &hid, sizeof(hid));
 		write(sockfd, &loid, sizeof(loid));
+		write(sockfd, &bino, sizeof(bino));
 
 		read(sockfd, &ret, sizeof(ret));
 
