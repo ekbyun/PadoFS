@@ -42,5 +42,6 @@ char *retstr[] = {
 	"ALREADY_CREATED",
 	"MS_CON_ERROR",
 	"INO_FULL",
-	"INVALUD_UNREF"
+	"INVALUD_UNREF",
+	"CHANGED_MAPPING"
 };
