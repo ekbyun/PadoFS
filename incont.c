@@ -204,6 +204,7 @@ int delete_inode(struct inode *inode) {
 		write(fd, &com, sizeof(com));
 		write(fd, &inode->base_ino, sizeof(ino_t));
 		write(fd, &inode->ino, sizeof(ino_t));
+		write(fd, &inode->base_ino, sizeof(ino_t));
 		read(fd, &ret, sizeof(ret) );
 		close(fd);
 		UNSET_SHARED(inode);
