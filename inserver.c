@@ -470,6 +470,7 @@ void *worker_thread(void *arg) {
 			case READ_DOBJ:
 				read(fd, &hid, sizeof(hid));
 				read(fd, &loid, sizeof(loid));
+				read(fd, &bino, sizeof(bino));
 				
 				num = 0;
 				if( tinode == NULL ) {
@@ -479,6 +480,13 @@ void *worker_thread(void *arg) {
 					write(fd, &size, sizeof(size));
 					write(fd, &num, sizeof(num));
 					ret = -INVALID_INO;
+				} else if( tinode->base_ino != bino ) {
+					bino = 0;
+					size = 0;
+					write(fd, &bino, sizeof(bino));
+					write(fd, &size, sizeof(size));
+					write(fd, &num, sizeof(num));
+					ret = -CHANGED_MAPPING;
 				} else {
 					pthread_rwlock_wrlock( &tinode->rwlock );
 					
