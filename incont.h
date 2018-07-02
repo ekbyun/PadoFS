@@ -94,25 +94,19 @@ struct extent {
 
 struct inode {	//type may need to be changed defined in kernel /include/linux/types.h 
 	ino_t ino;	//inode number ino_pado
+#ifdef WITH_MAPSERVER
 	ino_t base_ino;
-	ino_t parent_ino;
+#endif
 	size_t size;		//loff_t
 	
-//	char name[FILE_NAME_SIZE];
-
-	mode_t mode;
-	uid_t uid;
-	gid_t gid;
 	struct timespec atime;
 	struct timespec mtime;
-//	struct timespec ctime;
 
 	struct extent *flayout;
 	uint32_t num_exts;
 	int32_t refcount;
 
 	struct dobject *do_map;
-//	pthread_rwlock_t dmlock;	//lock for dobject hash-map
 
 	pthread_rwlock_t alive;	//lock to guarantee the inode being kept alive 
 	pthread_rwlock_t rwlock;	//lock for read/write operations
@@ -122,17 +116,15 @@ struct inode {	//type may need to be changed defined in kernel /include/linux/ty
 	uint8_t flags;	// SHARED, 
 };
 
+#ifdef WITH_MAPSERVER
 void init_inode_container(uint32_t, in_addr_t /*, ino_t*/);
-
+struct inode *create_inode_withms(ino_t *, ino_t, size_t, int *);
+#endif
+struct inode *create_inode(ino_t, size_t, int *);
 struct inode *acquire_inode(ino_t);
 int release_inode(struct inode *);
 int delete_inode(struct inode *);
 void free_inode(struct inode *);
-
-struct inode *get_new_inode();
-struct inode *create_inode(/*const char *, */ino_t *, mode_t, ino_t, ino_t,uid_t,gid_t, size_t, int *);
-
-int get_inode_dobj(struct inode *,int);
 
 struct extent *create_extent(struct dobject *,size_t,size_t,size_t);
 void release_extent(struct extent *,int);		//remove extent from ref list of dobject and free memory
@@ -141,8 +133,9 @@ void replace_extent(struct extent *,struct extent *);
 void remove_extent(struct extent *,int);		//remove extent from flayout
 
 struct dobject *acquire_dobject(uint32_t, loid_t, struct inode *, int);
-int remove_dobject(struct dobject *, /*int,*/ int);
+int get_inode_dobj(struct inode *,int);
 int read_dobject(struct dobject *, int);
+int remove_dobject(struct dobject *, /*int,*/ int);
 
 int pado_write(struct dobject *, size_t, size_t, size_t);
 int pado_truncate(struct inode *, size_t);

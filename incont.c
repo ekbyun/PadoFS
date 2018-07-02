@@ -1,15 +1,14 @@
 #include"incont.h"
 #include"inserver.h"
 
-char zeros[FILE_NAME_SIZE] = {0,};
+struct inode *inode_map = NULL;
+pthread_rwlock_t imlock = PTHREAD_RWLOCK_INITIALIZER;
 
+#ifdef WITH_MAPSERVER
 ino_t inodebase;
 ino_t inodemax;
 #define INBASE_LOW_MAX	0xFFFFFFFF
 pthread_mutex_t ino_mut = PTHREAD_MUTEX_INITIALIZER;
-
-struct inode *inode_map = NULL;
-pthread_rwlock_t imlock = PTHREAD_RWLOCK_INITIALIZER;
 
 in_addr_t ms_addr_base;
 
@@ -25,7 +24,6 @@ void init_inode_container(uint32_t nodeid, in_addr_t ms_addr/*ino_t base*/) {
 	} else {
 		ms_addr_base = inet_addr(MS_ADDR_DEF);
 	}
-//	dp("inode_container is created! base inode number = %ld max=%ld\n", inodebase, inodemax);
 	dp("inode_container is created! base inode number = %lu max=%lu dos_addr_base=%u\n", inodebase, inodemax,ms_addr);
 }
 
@@ -35,8 +33,7 @@ void get_ms_addr(struct sockaddr_in *addr, ino_t lino){
 	addr->sin_addr.s_addr = ms_addr_base + lino % 1;	//TODO : change
 }
 
-struct inode *create_inode(/*const char *name,*/ ino_t *ino, mode_t mode, ino_t pino, ino_t bino, 
-                           uid_t uid, gid_t gid, size_t size, int *ret) 
+struct inode *create_inode_withms(ino_t *ino, ino_t bino, size_t size, int *ret) 
 {
 	struct inode *new_inode = calloc(1, sizeof(struct inode));
 	if( new_inode == NULL ) {
@@ -44,13 +41,8 @@ struct inode *create_inode(/*const char *name,*/ ino_t *ino, mode_t mode, ino_t 
 		return NULL;
 	}
 
-	new_inode->parent_ino = pino;
 	new_inode->base_ino = bino;
 	new_inode->size = size;
-
-	new_inode->mode = mode;
-	new_inode->uid = uid;
-	new_inode->gid = gid;
 
 	pthread_rwlock_init(&new_inode->alive, NULL);
 	pthread_rwlock_init(&new_inode->rwlock, NULL);
@@ -68,11 +60,11 @@ struct inode *create_inode(/*const char *name,*/ ino_t *ino, mode_t mode, ino_t 
 	get_ms_addr(&msaddr, bino);
 	sockfd = socket(AF_INET, SOCK_STREAM, 0);
 	if( connect(sockfd, (struct sockaddr *)&msaddr, sizeof(msaddr)) < 0 ) {
+		pthread_rwlock_unlock(&imlock);
 		*ret = -MS_CON_ERROR;
 		dp("Creating inode ino = %lu for bino = %lu....failed. MS_CON_ERROR\n", new_inode->ino, bino);
 		close(sockfd);
 		free(new_inode);
-		pthread_rwlock_unlock(&imlock);
 		return NULL;
 	}
 
@@ -94,10 +86,10 @@ struct inode *create_inode(/*const char *name,*/ ino_t *ino, mode_t mode, ino_t 
 	read(sockfd, ino, sizeof(ino_t));
 	close(sockfd);
 	if( *ino != new_inode->ino ) {
+		pthread_rwlock_unlock(&imlock);
 		*ret = -ALREADY_CREATED;
 		free(new_inode);
 		dp("Creating inode ino = %lu for bino = %lu....failed. ALREADY_CREATED\n", new_inode->ino, bino);
-		pthread_rwlock_unlock(&imlock);
 		return NULL;
 	}
 
@@ -105,9 +97,55 @@ struct inode *create_inode(/*const char *name,*/ ino_t *ino, mode_t mode, ino_t 
 	// insert to the inode hash-map in this server
 	HASH_ADD_KEYPTR(hh, inode_map, &(new_inode->ino), sizeof(ino_t), new_inode);
 	dp(".(inode_map size=%d)....\n", HASH_COUNT(inode_map) );
+	pthread_rwlock_rdlock( &new_inode->alive );
 	pthread_rwlock_unlock(&imlock);
 
 	dp("Creating inode ino = %lu for bino = %lu....success\n", new_inode->ino, bino);
+	return new_inode;
+}
+#endif
+
+struct inode *create_inode(ino_t ino, size_t size, int *ret) {
+	struct inode *new_inode = NULL;
+	pthread_rwlock_wrlock(&imlock);
+
+	HASH_FIND(hh, inode_map, &ino, sizeof(ino_t), new_inode);
+	if( new_inode && IS_DELETED(new_inode) ) {
+		HASH_DELETE(hh, inode_map, new_inode);
+	} else if (new_inode) {
+		pthread_rwlock_rdlock(&new_inode->alive);
+		pthread_rwlock_unlock(&imlock);
+		dp("Create_open inode ino = %lu ....OPENED\n", new_inode->ino);
+		*ret = -ALREADY_CREATED;
+		return new_inode;
+	}	//create new one
+
+	new_inode = calloc(1, sizeof(struct inode));
+
+	if( new_inode == NULL ) {
+		*ret = -INTERNAL_ERROR;
+		pthread_rwlock_unlock(&imlock);
+		return NULL;
+	}
+
+	new_inode->ino = ino;
+	new_inode->size = size;
+
+	pthread_rwlock_init(&new_inode->alive, NULL);
+	pthread_rwlock_init(&new_inode->rwlock, NULL);
+	new_inode->flags = 0;
+	new_inode->do_map = NULL;
+	new_inode->flayout = NULL;	
+	new_inode->num_exts = 0;
+	new_inode->refcount = 0;
+
+	HASH_ADD_KEYPTR(hh, inode_map, &(new_inode->ino), sizeof(ino_t), new_inode);
+	dp(".(inode_map size=%d)....\n", HASH_COUNT(inode_map) );
+
+	pthread_rwlock_rdlock(&new_inode->alive);
+	pthread_rwlock_unlock(&imlock);
+	dp("Create_open inode ino = %lu ....CREATED\n", new_inode->ino);
+	*ret = SUCCESS;
 	return new_inode;
 }
 
@@ -130,11 +168,14 @@ void free_inode(struct inode *inode) {
 #ifndef NDEBUG
 	ino_t ino = inode->ino;
 #endif
+	struct inode *ret = NULL;
+
 	dp("Releasing inode %lu\n",ino);
 	pthread_rwlock_wrlock(&imlock); 
-	HASH_DELETE(hh, inode_map, inode);
+	HASH_FIND(hh, inode_map, &(inode->ino), sizeof(ino_t), ret);
+	if( ret ) HASH_DELETE(hh, inode_map, inode);
+	dp(" inode %lu is removed from inode-map. inode_map size = %d\n",ino,HASH_COUNT(inode_map));
 	pthread_rwlock_unlock(&imlock);
-	dp(" inode %lu is removed from inode-map\n",ino);
 
 	pthread_rwlock_wrlock(&inode->alive); 
 	assert(inode->flayout == NULL);
@@ -157,6 +198,7 @@ int release_inode(struct inode *inode) {
 
 	SET_DELETED(inode);
 
+#ifdef WITH_MAPSERVER
 	// unregister mapping from l-p mapping server
 	struct sockaddr_in msaddr;
 	int sockfd;
@@ -173,7 +215,7 @@ int release_inode(struct inode *inode) {
 	} else {
 		//TODO : handle error
 	}
-
+#endif
 	return 1;
 }
 
@@ -202,9 +244,14 @@ int delete_inode(struct inode *inode) {
 			return 0;
 		}
 		write(fd, &com, sizeof(com));
+#ifdef WITH_MAPSERVER
 		write(fd, &inode->base_ino, sizeof(ino_t));
 		write(fd, &inode->ino, sizeof(ino_t));
 		write(fd, &inode->base_ino, sizeof(ino_t));
+#else 
+		write(fd, &inode->ino, sizeof(ino_t));
+		write(fd, &inode->ino, sizeof(ino_t));
+#endif
 		read(fd, &ret, sizeof(ret) );
 		close(fd);
 		UNSET_SHARED(inode);
@@ -380,7 +427,9 @@ struct dobject *acquire_dobject(uint32_t host_id, loid_t loid, struct inode *ino
 			write(fd, &com, sizeof(com));
 			write(fd, &loid, sizeof(loid));
 			write(fd, &inode->ino, sizeof(ino_t));
+#ifdef WITH_MAPSERVER
 			write(fd, &inode->base_ino, sizeof(ino_t));
+#endif
 			read(fd, &ret, sizeof(ret) );
 			close(fd);
 		}
@@ -429,6 +478,9 @@ int remove_dobject(struct dobject *dobj, /*int force, */int unlink)
 			write(fd, &com, sizeof(com));
 			write(fd, &dobj->addr.loid, sizeof(loid_t));
 			write(fd, &dobj->inode->ino, sizeof(ino_t));
+#ifdef WITH_MAPSERVER
+			write(fd, &dobj->inode->base_ino, sizeof(ino_t));
+#endif
 			read(fd, &ret, sizeof(ret) );
 			close(fd);
 		}
@@ -899,12 +951,15 @@ int pado_read(struct inode *inode, int fd, int flag, size_t start, size_t end)
 	}
 
 	struct extent *cur = find_start_extent(inode, start);
-
+#ifdef WITH_MAPSERVER
 	ino_t bino = inode->base_ino;
+#else
+	ino_t bino = inode->ino;
+#endif
 	size_t off_do, length, off_f, offset, next_off, diff;
 	int base_cloned = 0;
 
-	offset = 0;
+	offset = (flag) ? 0 : start;
 	off_f = start;
 //	if( bino == 0 ) flag = 0;
 
@@ -953,29 +1008,21 @@ int pado_getinode_meta(struct inode *inode, int fd)
 	if( inode ) {
 		dp("pado getinode ino = %ld\n",inode->ino);
 		
+#ifdef WITH_MAPSERVER
 		write(fd, &inode->base_ino , sizeof(ino_t) );
-		write(fd, &inode->parent_ino , sizeof(ino_t) );
+#endif
 		write(fd, &inode->size , sizeof(size_t) );
-//		write(fd, inode->name , FILE_NAME_SIZE );
 	
-		write(fd, &inode->mode , sizeof(mode_t) );
-		write(fd, &inode->uid , sizeof(uid_t) );
-		write(fd, &inode->gid , sizeof(gid_t) );
 		write(fd, &inode->atime.tv_sec , sizeof(time_t) );
 		write(fd, &inode->mtime.tv_sec , sizeof(time_t) );
-//		write(fd, &inode->ctime.tv_sec , sizeof(time_t) );
 		write(fd, &inode->flags , sizeof(uint8_t) );
 	} else {
+#ifdef WITH_MAPSERVER
 		write(fd, zeros, sizeof(ino_t));
-		write(fd, zeros, sizeof(ino_t));
+#endif
 		write(fd, zeros, sizeof(size_t));
-//		write(fd, zeros, FILE_NAME_SIZE );
-		write(fd, zeros, sizeof(mode_t) );
-		write(fd, zeros, sizeof(uid_t) );
-		write(fd, zeros, sizeof(gid_t) );
 		write(fd, zeros, sizeof(time_t) );
 		write(fd, zeros, sizeof(time_t) );
-//		write(fd, zeros, sizeof(time_t) );
 		write(fd, zeros, sizeof(uint8_t) );
 		return -INVALID_INO;
 	}
@@ -1011,14 +1058,34 @@ int pado_getinode_all(struct inode *inode, int fd)
 
 void do_backup(int fd) {
 	struct inode *cur, *tmp;
-
-	dp("Backing up whole inodes. inodebase = %ld\n",inodebase);
+	dp("Backing up whole inodes. num inodes = %d\n", HASH_COUNT(inode_map));
 
 //	write(fd, &inodebase, sizeof(ino_t));
+#ifdef WITH_MAPSERVER
+	struct sockaddr_in msaddr;
+	int sockfd;
+	unsigned char com = 'D';
+	ino_t bino;
+#endif
 
 	pthread_rwlock_rdlock(&imlock);			//grarantee to any inode is created of deleted
 	HASH_ITER(hh, inode_map, cur, tmp) {	//for all inodes, write whole inode to the fd
 		if( IS_DELETED(cur) ) continue;
+#ifdef WITH_MAPSERVER
+	// unregister mapping from l-p mapping server
+		bino = cur->base_ino;
+		get_ms_addr(&msaddr, bino);
+	
+		sockfd = socket(AF_INET, SOCK_STREAM, 0);
+		if( connect(sockfd, (struct sockaddr *)&msaddr, sizeof(msaddr)) >= 0 ) {
+			write(sockfd, &com, sizeof(com));
+			write(sockfd, &bino, sizeof(ino_t));
+			read(sockfd, &bino, sizeof(ino_t));
+			close(sockfd);
+		}
+#else
+		write(fd, &cur->ino, sizeof(ino_t));
+#endif
 		pado_getinode_all(cur, fd);
 	}
 	pthread_rwlock_unlock(&imlock);
@@ -1068,6 +1135,11 @@ int stageout(struct inode *inode) {
 			return -DOS_CON_ERROR;
 		}
 		com = DRAIN_SHARED;
+#ifdef WITH_MAPSERVER
+		loid = inode->base_ino;
+#else
+		loid = inode->ino;
+#endif
 
 		write(fds[0], &com, sizeof(com));
 		write(fds[0], &loid, sizeof(loid));
@@ -1131,15 +1203,13 @@ int stageout(struct inode *inode) {
 void print_all() {
 	struct inode *cur, *tmp;
 
-	dp("printing whole inodes. inodebase = %ld\n",inodebase);
+	dp("printing whole inodes. num inodes = %d \n",HASH_COUNT(inode_map));
 
-	pthread_mutex_lock(&ino_mut);
 	pthread_rwlock_rdlock(&imlock);
 	HASH_ITER(hh, inode_map, cur, tmp) {
 		print_inode(cur);
 	}
 	pthread_rwlock_unlock(&imlock);
-	pthread_mutex_unlock(&ino_mut);
 }
 //#endif
 

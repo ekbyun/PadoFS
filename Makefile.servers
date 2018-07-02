@@ -1,6 +1,7 @@
 CC = gcc
 
 #CFLAGS += -Wall -Werror -c -DNODP
+#CFLAGS += -Wall -Werror -c -DWITH_MAPSERVER
 CFLAGS += -Wall -Werror -c
 
 LIBS = -lpthread -lrt
@@ -12,7 +13,7 @@ INOS_PROG = inodeserver
 
 LPMAP_SERVER = lpmapser
 
-PROGS = $(INOS_PROG) $(LPMAP_SERVER) testlocal testremote
+PROGS = $(INOS_PROG) $(LPMAP_SERVER) testremote #testlocal
 #PROGS = $(INOS_PROG) $(CONV)
 
 .SUFFIXES:.c .o
@@ -27,8 +28,8 @@ all:$(PROGS)
 $(INOS_PROG): $(INOS_OBJS)
 	$(CC) $(INCLUDES) $(LIBS) -o $@ $^
 
-testlocal: incont.o testlocal.o test.o
-	$(CC) $(INCLUDES) $(LIBS) -o $@ $^
+#testlocal: incont.o testlocal.o test.o
+#	$(CC) $(INCLUDES) $(LIBS) -o $@ $^
 
 testremote: incont.o testremote.o test.o
 	$(CC) $(INCLUDES) $(LIBS) -o $@ $^

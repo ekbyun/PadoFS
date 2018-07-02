@@ -68,10 +68,12 @@ int main(int argc, char **argv) {
 		read(fd, &com, sizeof(com));
 		read(fd, &loid, sizeof(loid));
 		read(fd, &pino, sizeof(loid));
-		read(fd, &pino, sizeof(loid));
+#ifdef WITH_MAPSERVER
+		read(fd, &bino, sizeof(loid));
+#endif
 		write(fd, &ret, sizeof(ret));
 
-		printf("com=%s ,loid=%lu ,pino=%lu ,bino=%lu--> %s(%d)\n", dcomst[com],loid,pino,bino,retst[ret],ret);
+		printf("com=%s ,loid=%lu ,pino=%lu --> %s(%d)\n", dcomst[com],loid,pino,retst[ret],ret);
 
 		close(fd);
 	} 

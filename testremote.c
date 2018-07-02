@@ -8,8 +8,8 @@
 #include"errno.h"
 #include"test.h"
 
-#define NUM_COM	10
-#define NUM_INODE 1
+#define NUM_COM	16
+#define NUM_INODE 2
 
 int main(int argc, char **argv) 
 {
@@ -50,26 +50,23 @@ int main(int argc, char **argv)
 	size_t start, end;
 	
 	lhid[0] = inet_addr("127.0.0.1");
-	lhid[1] = inet_addr("192.168.0.101");
+	lhid[1] = inet_addr("192.168.0.7");
 	printf("%u %u\n", lhid[0], lhid[1]); 
 
-	ino_t _bino, _pino;
+#ifdef WITH_MAPSERVER
+	ino_t _bino;
+#endif
 	loid_t _loid;
 	size_t _size, _f, _do, _len;
-	mode_t _mode;
-	uid_t _uid;
-	gid_t _gid;
 	time_t _at, _mt;
 	uint8_t _flags;
 	uint32_t _hid;
 
-	ino_t pino = 10, bino, binos[NUM_INODE];
-	mode_t mode = 0666;
-	uid_t uid = 7;
-	gid_t gid = 17;
+	ino_t bino, binos[NUM_INODE];
 	size_t size = 4096;
 
 	for(i = 0 ; i < NUM_INODE; i++ ) {
+#ifdef WITH_MAPSERVER
 		com = CREATE_INODE;
 		sockfd = socket(AF_INET, SOCK_STREAM, 0);
 		if( connect(sockfd, (struct sockaddr *)&clientaddr, client_len) < 0 ) {
@@ -78,15 +75,9 @@ int main(int argc, char **argv)
 		}
 		bino = i+100;
 		binos[i] = bino;
-		uid++;
-		gid++;
 		write(sockfd, &com, sizeof(com));
 		write(sockfd, &bino, sizeof(bino));
-		write(sockfd, &pino, sizeof(pino));
 		write(sockfd, &size, sizeof(size));
-		write(sockfd, &mode, sizeof(mode));
-		write(sockfd, &uid, sizeof(uid));
-		write(sockfd, &gid, sizeof(gid));
 
 		read(sockfd,&ret,sizeof(ret));
 		if(	 ret == SERVER_BUSY ) {
@@ -109,17 +100,13 @@ int main(int argc, char **argv)
 
 				read(sockfd,&ret,sizeof(ret));
 				read(sockfd, &_bino , sizeof(ino_t));
-				read(sockfd, &_pino , sizeof(ino_t));
 				read(sockfd, &_size , sizeof(size_t));
-				read(sockfd, &_mode , sizeof(mode_t));
-				read(sockfd, &_uid , sizeof(uid_t));
-				read(sockfd, &_gid , sizeof(gid_t));
 				read(sockfd, &_at , sizeof(time_t));
 				read(sockfd, &_mt , sizeof(time_t));
 				read(sockfd, &_flags , sizeof(uint8_t));
 				read(sockfd, &_ne , sizeof(uint32_t));
 
-				printf("Opened[%lu] ret=%s, bino=%lu , pino=%lu, size=%lu, mode=%o, u/d=%d/%d, a/m=%lu/%lu, flags=%o, num_exts=%d\n",tinos[i], retstr[ABS(ret)], _bino,_pino,_size,_mode,_uid,_gid,_at,_mt,_flags,_ne);
+				printf("Opened[%lu] ret=%s, bino=%lu , size=%lu, a/m=%lu/%lu, flags=%o, num_exts=%d\n",tinos[i], retstr[ABS(ret)], _bino,_size,_at,_mt,_flags,_ne);
 				for(j = 0 ; j < _ne ; j++ ) {
 					read(sockfd, &_hid , sizeof(uint32_t));
 					read(sockfd, &_loid , sizeof(loid_t));
@@ -141,8 +128,54 @@ int main(int argc, char **argv)
 				created++;
 			}
 		}
-		printf("create inode %ld returns %s\n", tinos[i], retstr[ABS(ret)]);
+		printf("create inode %lu(%lu) returns %s\n", tinos[i], binos[i], retstr[ABS(ret)]);
 		close(sockfd);
+#else
+		com = CREATE_OPEN_INODE;
+		sockfd = socket(AF_INET, SOCK_STREAM, 0);
+		if( connect(sockfd, (struct sockaddr *)&clientaddr, client_len) < 0 ) {
+			fail++;
+			continue;
+		}
+		bino = i+100;
+		binos[i] = bino;
+		tinos[i] = bino;
+		write(sockfd, &com, sizeof(com));
+		write(sockfd, &bino, sizeof(bino));
+		write(sockfd, &size, sizeof(size));
+
+		read(sockfd,&ret,sizeof(ret));
+		if(	 ret == SERVER_BUSY ) {
+			fail++;
+		} else if ( ret == QUEUED ) {
+			read(sockfd, &_size , sizeof(size_t));
+			read(sockfd, &_at , sizeof(time_t));
+			read(sockfd, &_mt , sizeof(time_t));
+			read(sockfd, &_flags , sizeof(uint8_t));
+
+			read(sockfd, &_ne , sizeof(uint32_t));
+
+			printf("Opened[%lu] size=%lu, a/m=%lu/%lu, flags=%o, num_exts=%d\n",binos[i], _size,_at,_mt,_flags,_ne);
+			for(j = 0 ; j < _ne ; j++ ) {
+				read(sockfd, &_hid , sizeof(uint32_t));
+				read(sockfd, &_loid , sizeof(loid_t));
+				read(sockfd, &_f , sizeof(size_t));
+				read(sockfd, &_do , sizeof(size_t));
+				read(sockfd, &_len , sizeof(size_t));
+				printf(" ino=%lu, do=[%u,%lu],range=[%lu,%lu,%lu]\n",tinos[i],_hid,_loid,_f,_do,_len);
+			}
+		}
+		read(sockfd,&ret,sizeof(ret));
+		close(sockfd);
+		printf("create inode %lu(%lu) returns %s\n", tinos[i], binos[i], retstr[ABS(ret)]);
+		if(ret == SUCCESS ) {
+			created++;
+		} else if( ret == -ALREADY_CREATED ) {
+			opened++;
+		} else {
+			fail++;
+		}
+#endif
 	}
 
 	printf("[%d] Created = %d/%d, opened = %d/%d, fail = %d\n",pid,created,NUM_INODE,opened,NUM_INODE, fail );
@@ -150,7 +183,6 @@ int main(int argc, char **argv)
 		printf("stop due to create/open failure\n");
 		exit(0);
 	}
-
 
 	for(i = 0; i < NUM_COM; i++) {
 		if( argc > 3 && argv[3][0] == 'i' ) { 
@@ -166,7 +198,7 @@ int main(int argc, char **argv)
 			if( ci[0] == 'r' ) com = READ_INODE_WHOLE;
 		} else {
 			com = WRITE;
-			hid = lhid[i%2];
+			hid = lhid[rand()%2];
 			loid = rand() % 4;
 			start = rand() % 10000;
 			end = 10 + rand()%1000;
@@ -182,6 +214,7 @@ int main(int argc, char **argv)
 		}
 
 		tino = tinos[i%NUM_INODE];
+		tino = tinos[0];
 
 		write(sockfd, &com, sizeof(com) );
 		write(sockfd, &tino, sizeof(tino) );
@@ -218,6 +251,58 @@ int main(int argc, char **argv)
 	}
 	printf("[%d]live test success = %d/%d, fail = %d/%d fail2=%d busy = %d (%s)\n",pid,suc,c,fail,c, fail2, busy, ci);
 
+//	TEST for READ_LAYOUT and CLONE_TO
+	sockfd = socket(AF_INET, SOCK_STREAM, 0);
+	connect(sockfd, (struct sockaddr *)&clientaddr, client_len);
+	com = READ_LAYOUT;
+	write(sockfd, &com, sizeof(com));
+	write(sockfd, &tinos[0], sizeof(tino));
+	read(sockfd, &ret, sizeof(ret));
+	_f = 1000;
+	_len = 5000;
+	_flags = 1;
+	
+	write(sockfd, &_f, sizeof(size_t));
+	write(sockfd, &_len, sizeof(size_t));
+	write(sockfd, &_flags, sizeof(_flags));
+
+	int fd2 = socket(AF_INET, SOCK_STREAM, 0);
+	connect(fd2, (struct sockaddr *)&clientaddr, client_len);
+	unsigned char com2 = CLONE_TO;
+	write(fd2, &com2, sizeof(com));
+	write(fd2, &tinos[1], sizeof(tino));
+	read(fd2, &ret, sizeof(ret));
+
+	_do = rand()% 5000;
+	write(fd2, &_do, sizeof(size_t));
+	write(fd2, &_len, sizeof(size_t));
+	printf("CLONE %lu,(%lu~%lu) to %lu,(%lu,%lu)\n",tinos[0],_f,_f+_len,tinos[1],_do,_do+_len);
+
+    while(1) {
+		read(sockfd, &_hid, sizeof(uint32_t));
+		read(sockfd, &_loid, sizeof(loid_t));
+
+		write(fd2, &_hid, sizeof(uint32_t));
+		write(fd2, &_loid, sizeof(loid_t));
+
+		if( _hid == 0 && _loid == 0 ) break;  //end of list
+
+		read(sockfd, &_f, sizeof(size_t));
+		read(sockfd, &_do, sizeof(size_t));
+		read(sockfd, &_len, sizeof(size_t));
+
+		write(fd2, &_f, sizeof(size_t));
+		write(fd2, &_do, sizeof(size_t));
+		write(fd2, &_len, sizeof(size_t));
+
+		printf(" layout read is dobj=[%u,%lu] (%lu ~ %lu , %lu)  off_do = %lu\n",_hid, _loid, _f, _f + _len, _len, _do);
+	}
+	read(sockfd, &ret, sizeof(ret));
+	printf("[%d]%s on %ld is done. ret = %s\n", pid,comstr[com], tinos[0], retstr[ABS(ret)]);
+	close(sockfd);
+	read(fd2, &ret, sizeof(ret));
+	printf("[%d]%s on %ld is done. ret = %s\n", pid,comstr[com2], tinos[1], retstr[ABS(ret)]);
+	close(fd2);
 /*
 //	TEST for GET_INODE_DOBJ, READ_DOBJECT, RELEASE_DRAIN_LOCK
 	uint32_t _hids[1024];
@@ -256,14 +341,18 @@ int main(int argc, char **argv)
 		write(sockfd, &tino, sizeof(tino));
 		write(sockfd, &hid, sizeof(hid));
 		write(sockfd, &loid, sizeof(loid));
+#ifdef WITH_MAPSERVER
 		write(sockfd, &bino, sizeof(bino));
+#endif
 
 		read(sockfd, &ret, sizeof(ret));
 
+#ifdef WITH_MAPSERVER
 		read(sockfd, &_bino, sizeof(_bino));
+#endif
 		read(sockfd, &_size, sizeof(_size));
 		read(sockfd, &_num, sizeof(_num));
-		printf("bino = %lu, size=%lu, num=%u\n",_bino, _size, _num);
+		printf("size=%lu, num=%u\n", _size, _num);
 		
 		for(j=0;j<_num;j++){
 			read(sockfd, &_f, sizeof(size_t));
@@ -287,7 +376,8 @@ int main(int argc, char **argv)
 		close(sockfd);
 		printf("[%d]%s on %ld is done. ret = %s\n", pid,comstr[com], tino, retstr[ABS(ret)]);
 	}
-
+	*/
+	/*
 	// TEST for REMOVE_DOBJ
 	for(i = 0 ; i < _ne ; i++) {
 		hid = _hids[i];
@@ -307,7 +397,7 @@ int main(int argc, char **argv)
 		close(sockfd);
 		printf("[%d]%s on %ld is done. ret = %s\n", pid,comstr[com], tino, retstr[ABS(ret)]);
 	}
-*/
+
 	// TEST for DELETE_INODE before UNREF
 	for(i = 0 ; i < NUM_INODE ; i++ ) {
 		tino = tinos[i];
@@ -322,7 +412,6 @@ int main(int argc, char **argv)
 		close(sockfd);
 		printf("[%d]%s on %ld is done. ret = %s\n", pid,comstr[com], tino, retstr[ABS(ret)]);
 	}
-
 	// TEST for UNREF
 	for(i = 0 ; i < NUM_INODE ; i++ ) {
 		tino = tinos[i];
@@ -337,7 +426,6 @@ int main(int argc, char **argv)
 		close(sockfd);
 		printf("[%d]%s on %ld is done. ret = %s\n", pid,comstr[com], tino, retstr[ABS(ret)]);
 	}
-
 	// TEST for DELETE_INODE after UNREF
 	for(i = 0 ; i < NUM_INODE ; i++ ) {
 		tino = tinos[i];
@@ -353,7 +441,7 @@ int main(int argc, char **argv)
 		printf("[%d]%s on %ld is done. ret = %s\n", pid,comstr[com], tino, retstr[ABS(ret)]);
 	}
 
-
+*/
 /*
 	// TEST for BACKUP_AND_STOP
 	sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -362,6 +450,6 @@ int main(int argc, char **argv)
 	write(sockfd, &com, sizeof(com));
 	read(sockfd, &ret, sizeof(ret));
 	close(sockfd);
-*/	
+*/
 	return 0;
 }
