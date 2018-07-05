@@ -275,10 +275,11 @@ void *worker_thread(void *arg) {
 	uint32_t hid, num;
 	loid_t loid;
 	struct inode *tinode;
-	size_t size;
+	size_t size, _ver;
 //	char name[FILE_NAME_SIZE];
-	uint8_t flags;
+	uint8_t flags,_flags;
 	int free;
+	time_t _at,_mt;
 
 #ifndef NODP
 	int tid;
@@ -420,11 +421,15 @@ void *worker_thread(void *arg) {
 				break;
 			case READ_INODE_WHOLE:	
 				read(fd, &flags, sizeof(flags));
+				read(fd, &_ver, sizeof(_ver));
 				if( tinode && flags == 1 ) {	//increase refcount
 					pthread_rwlock_wrlock( &tinode->rwlock );
 					if( IS_DELETED(tinode) ) {
 						pado_getinode_all(NULL, fd);
 						ret = -IS_DELETED;
+					} else if( tinode->version <= _ver ) {
+						pado_getinode_all(NULL, fd);
+						ret = -IS_UPTODATE;
 					} else {
 						tinode->refcount++;
 						ret = pado_getinode_all(tinode, fd);
@@ -435,6 +440,9 @@ void *worker_thread(void *arg) {
 					if( IS_DELETED(tinode) ) {
 						pado_getinode_all(NULL, fd);
 						ret = -IS_DELETED;
+					} else if( tinode->version <= _ver ) {
+						pado_getinode_all(NULL, fd);
+						ret = -IS_UPTODATE;
 					} else {
 						ret = pado_getinode_all(tinode, fd);
 					}
@@ -549,13 +557,27 @@ void *worker_thread(void *arg) {
 #endif
 			case CREATE_OPEN_INODE:
 				read(fd, &size, sizeof(size_t));
+				read(fd, &flags, sizeof(uint8_t));	// 0 : create only, 1 : create/open and read meta only, 2: create/open and readall 
 				tinode = create_inode(tino, size, &ret);
-				if( tinode ) {
+				if( tinode && flags == 0 ) {
+					read(fd, &_flags, sizeof(uint8_t));
+					read(fd, &_at, sizeof(time_t));
+					read(fd, &_mt, sizeof(time_t));
+					read(fd, &_ver, sizeof(size_t));
+					tinode->flags = _flags;
+					tinode->atime.tv_sec = _at;
+					tinode->mtime.tv_sec = _mt;
+					tinode->version = _ver;
+				} else if ( tinode && flags > 0 ) {
 					pthread_rwlock_wrlock( &tinode->rwlock );
 					tinode->refcount++;
 					pthread_rwlock_unlock( &tinode->rwlock );
 				}
-				pado_getinode_all(tinode, fd);
+				if( flags == 1 ) {
+					pado_getinode_meta(tinode, fd);
+				} else if ( flags > 1) {
+					pado_getinode_all(tinode, fd);
+				}
 				break;
 			case DELETE_INODE:
 				if( tinode ) {
@@ -619,7 +641,7 @@ void do_restore(int fd) {
 	ino_t bino;
 #endif
 	loid_t loid;
-	size_t size, off_f, off_do, len;
+	size_t size, off_f, off_do, len, version;
 	time_t at,mt/*,ct*/;
 	uint32_t ne, hid;
 	uint8_t flags;
@@ -635,6 +657,7 @@ void do_restore(int fd) {
 		read(fd, &size, sizeof(size_t));
 		read(fd, &at, sizeof(time_t));
 		read(fd, &mt, sizeof(time_t));
+		read(fd, &version, sizeof(size_t));
 		read(fd, &flags, sizeof(uint8_t));
 
 #ifdef WITH_MAPSERVER
@@ -647,6 +670,7 @@ void do_restore(int fd) {
 			inode->atime.tv_sec = at;
 			inode->mtime.tv_sec = mt;
 			inode->refcount = 0;
+			inode->version = version;
 			pthread_rwlock_unlock( &inode->alive );
 		} else if( ret != SUCCESS ) {
 			dp("Restoring inode for linode #%lu failed due to %s\n", ino, retstr[ABS(ret)]);

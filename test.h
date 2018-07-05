@@ -44,5 +44,6 @@ char *retstr[] = {
 	"MS_CON_ERROR",
 	"INO_FULL",
 	"INVALUD_UNREF",
-	"CHANGED_MAPPING"
+	"CHANGED_MAPPING",
+	"IS_UPTODATE"
 };

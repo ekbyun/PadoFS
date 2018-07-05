@@ -57,7 +57,7 @@ int main(int argc, char **argv)
 	ino_t _bino;
 #endif
 	loid_t _loid;
-	size_t _size, _f, _do, _len;
+	size_t _size, _f, _do, _len, _ver;
 	time_t _at, _mt;
 	uint8_t _flags;
 	uint32_t _hid;
@@ -94,9 +94,11 @@ int main(int argc, char **argv)
 				}
 				com = READ_INODE_WHOLE;
 				_flags = 1;
+				_ver = 0;
 				write(sockfd, &com, sizeof(com));
 				write(sockfd, &tinos[i], sizeof(ino_t));
 				write(sockfd, &_flags, sizeof(_flags));
+				write(sockfd, &_ver, sizeof(_ver));
 
 				read(sockfd,&ret,sizeof(ret));
 				read(sockfd, &_bino , sizeof(ino_t));
@@ -140,9 +142,11 @@ int main(int argc, char **argv)
 		bino = i+100;
 		binos[i] = bino;
 		tinos[i] = bino;
+		_flags = 2;
 		write(sockfd, &com, sizeof(com));
 		write(sockfd, &bino, sizeof(bino));
 		write(sockfd, &size, sizeof(size));
+		write(sockfd, &_flags, sizeof(uint8_t));
 
 		read(sockfd,&ret,sizeof(ret));
 		if(	 ret == SERVER_BUSY ) {
@@ -151,6 +155,7 @@ int main(int argc, char **argv)
 			read(sockfd, &_size , sizeof(size_t));
 			read(sockfd, &_at , sizeof(time_t));
 			read(sockfd, &_mt , sizeof(time_t));
+			read(sockfd, &_ver , sizeof(size_t));
 			read(sockfd, &_flags , sizeof(uint8_t));
 
 			read(sockfd, &_ne , sizeof(uint32_t));

@@ -101,6 +101,7 @@ struct inode {	//type may need to be changed defined in kernel /include/linux/ty
 	
 	struct timespec atime;
 	struct timespec mtime;
+	size_t version;
 
 	struct extent *flayout;
 	uint32_t num_exts;

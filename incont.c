@@ -51,6 +51,7 @@ struct inode *create_inode_withms(ino_t *ino, ino_t bino, size_t size, int *ret)
 	new_inode->flayout = NULL;	
 	new_inode->num_exts = 0;
 	new_inode->refcount = 1;
+	new_inode->version = 0;
 
 	pthread_rwlock_wrlock(&imlock);
 	//	try to connect to mapping server
@@ -138,6 +139,7 @@ struct inode *create_inode(ino_t ino, size_t size, int *ret) {
 	new_inode->flayout = NULL;	
 	new_inode->num_exts = 0;
 	new_inode->refcount = 0;
+	new_inode->version = 0;
 
 	HASH_ADD_KEYPTR(hh, inode_map, &(new_inode->ino), sizeof(ino_t), new_inode);
 	dp(".(inode_map size=%d)....\n", HASH_COUNT(inode_map) );
@@ -416,7 +418,11 @@ struct dobject *acquire_dobject(uint32_t host_id, loid_t loid, struct inode *ino
 		if( flag == 2 ) {
 			caddr.sin_family = AF_INET;
 			caddr.sin_port = htons(DOS_ETH_PORT);
-			caddr.sin_addr.s_addr = host_id;
+//			if( host_id == 0 ) { 
+//				caddr.sin_sddr.s_addr = inet_addr(DOS_IP_DEF);
+//			} else {
+				caddr.sin_addr.s_addr = host_id;	// host_id = 0 means DOS = this host
+//			}
 
 			fd = socket(AF_INET, SOCK_STREAM, 0);
 			if( connect(fd, (struct sockaddr *)&caddr, sizeof(caddr) ) < 0 ) {
@@ -546,6 +552,7 @@ int pado_write(struct dobject *dobj, size_t off_f, size_t off_do, size_t len)
 
 	clock_gettime(CLOCK_REALTIME_COARSE, &(inode->mtime) );
 	inode->atime.tv_sec = inode->mtime.tv_sec;
+	inode->version++;
 
 	return SUCCESS;
 }
@@ -564,6 +571,7 @@ int pado_truncate(struct inode *inode, size_t newsize)
 
 	clock_gettime(CLOCK_REALTIME_COARSE, &(inode->mtime) );
 	inode->atime.tv_sec = inode->mtime.tv_sec;
+	inode->version++;
 	
 	return SUCCESS;
 }
@@ -587,6 +595,7 @@ int pado_del_range(struct inode *inode, size_t start, size_t end)
 	clock_gettime(CLOCK_REALTIME_COARSE, &(inode->mtime) );
 	inode->ctime.tv_sec = inode->mtime.tv_sec;
 	inode->atime.tv_sec = inode->mtime.tv_sec;
+	inode->version++;
 
 	pthread_rwlock_unlock(&inode->rwlock);
 
@@ -638,6 +647,7 @@ int pado_clone(struct inode *tinode, int fd, size_t start, size_t end)
 
 	clock_gettime(CLOCK_REALTIME_COARSE, &(tinode->mtime) );
 	tinode->atime.tv_sec = tinode->mtime.tv_sec;
+	tinode->version++;
 
 	return SUCCESS;
 }
@@ -1015,6 +1025,7 @@ int pado_getinode_meta(struct inode *inode, int fd)
 	
 		write(fd, &inode->atime.tv_sec , sizeof(time_t) );
 		write(fd, &inode->mtime.tv_sec , sizeof(time_t) );
+		write(fd, &inode->version , sizeof(size_t) );
 		write(fd, &inode->flags , sizeof(uint8_t) );
 	} else {
 #ifdef WITH_MAPSERVER
@@ -1023,6 +1034,7 @@ int pado_getinode_meta(struct inode *inode, int fd)
 		write(fd, zeros, sizeof(size_t));
 		write(fd, zeros, sizeof(time_t) );
 		write(fd, zeros, sizeof(time_t) );
+		write(fd, zeros, sizeof(size_t));
 		write(fd, zeros, sizeof(uint8_t) );
 		return -INVALID_INO;
 	}

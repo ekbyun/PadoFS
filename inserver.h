@@ -44,7 +44,8 @@ typedef enum {
 	MS_CON_ERROR,
 	INO_FULL,
 	INVALID_UNREF,
-	CHANGED_MAPPING
+	CHANGED_MAPPING,
+	IS_UPTODATE
 } INS_RET;
 
 typedef enum {
