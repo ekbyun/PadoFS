@@ -1,8 +1,8 @@
 CC = gcc
 
-#CFLAGS += -Wall -Werror -c -DNODP
-#CFLAGS += -Wall -Werror -c -DWITH_MAPSERVER
-CFLAGS += -Wall -Werror -c
+#CFLAGS += -Wall -DNODP #-Werror
+#CFLAGS += -Wall -DWITH_MAPSERVER
+CFLAGS += -Wall 
 
 LIBS = -lpthread -lrt
 INCLUDES = 
