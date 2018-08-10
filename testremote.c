@@ -50,7 +50,7 @@ int main(int argc, char **argv)
 	size_t start, end;
 	
 	lhid[0] = inet_addr("127.0.0.1");
-	lhid[1] = inet_addr("192.168.0.7");
+	lhid[1] = inet_addr("192.168.0.101");
 	printf("%u %u\n", lhid[0], lhid[1]); 
 
 #ifdef WITH_MAPSERVER
