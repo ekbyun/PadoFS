@@ -1,6 +1,6 @@
-KCLI = padoclient
+KCLI = padofs_module
 obj-m += $(KCLI).o
-$(KCLI)-objs += testmodule.o convcli.o
+$(KCLI)-objs += super.o convcli.o
 
 KDIR := /lib/modules/$(shell uname -r)/build
 
