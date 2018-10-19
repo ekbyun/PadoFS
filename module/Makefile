@@ -1,4 +1,4 @@
-KCLI = padofs_module
+KCLI = padofs
 obj-m += $(KCLI).o
 $(KCLI)-objs += super.o convcli.o
 
