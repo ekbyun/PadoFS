@@ -8,12 +8,13 @@
 #include <sys/ioctl.h>
 #include <pthread.h>
 #include <fcntl.h>
+#include <sched.h>
+#include <errno.h>
 
 #define FILENAME "/dev/bench0"
 
-#define DEF_NUM_THREAD 4
-#define MAX_CORE	32
-#define DEL_LOOP	1
+#define DEF_NUM_THREAD 1
+#define MAX_CORE	64
 
 struct data {
 	void *address;
@@ -26,73 +27,85 @@ int sfd = 0;
 
 uint64_t wts[MAX_CORE] = {0,};
 int cnts[MAX_CORE] = {0,};
-void *saddr;
-
-void unittest(struct data *cont) {
-//	struct timeval start, end;
-//	int fd;
-	
-/*	fd = open( FILENAME, O_RDWR);
-	if( fd < 0 ) {
-		perror("device open error");
-		exit(-1);
-	}*/
-//	gettimeofday(&start,NULL);
-
-	ioctl(sfd, 0, cont);
-
-//	gettimeofday(&end,NULL);
-//	cont->wt = (end.tv_usec-start.tv_usec) + 100000 * (end.tv_sec-start.tv_sec) ;
-
-//	close(fd);
-};
+cpu_set_t masks[MAX_CORE];
+int page_size = 4096;
 
 void *thread_func(void *param)
 {
 	struct data cont;
-	unsigned long mask;
-	int i, j, idx;
+	int i, j, idx, ret;
+	long affi;
 	char *userdata;
+	int fd = sfd;
+	void *kaddr;
+	cpu_set_t mask;
+	
+	affi = (long)param;
+	CPU_ZERO(&mask);
+	CPU_SET(affi, &mask);
+	ret = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &mask);
+	if (ret<0) perror("pthread_setaffinity_np"); 
 
-	userdata = aligned_alloc(4096, 4096 * 2);
+#if defined (OPEN_PER_THREAD) || defined (OPEN_PER_LOOP)
+	fd = open( FILENAME, O_RDWR);
+	if( fd < 0 ) perror("device open error");
+#endif
 
-	mask = 1 << ((unsigned long)param % MAX_CORE); 
-	if (pthread_setaffinity_np(pthread_self(), sizeof(mask), (cpu_set_t *)&mask) <0) perror("pthread_setaffinity_np"); 
+	userdata = aligned_alloc(page_size, page_size * 2);
 
 	for(i = 0 ; i < loop ;i++) {
-		for(j = 0 ; j < 4096 ; j++) {
-			userdata[j] = i%256;
-			userdata[j+4096] = (i+1)%256;
+		for(j = 0 ; j < page_size ; j++) {
+			userdata[j] = i%page_size;
+			userdata[j+page_size] = (i+1)%256;
 		}
 		cont.address = (void *) userdata;
-		cont.wt = 0;
-		unittest(&cont);
+
+		ioctl(sfd, 0, &cont);
+	
 		idx = cont.cpuid;
-		saddr = cont.address;
+		kaddr = cont.address;
 		if(idx < MAX_CORE) {
 			wts[idx] = (wts[idx] * cnts[idx] + cont.wt) / (cnts[idx] + 1);
 			cnts[idx]++;
 		} else {
-			printf("[%3ld] to %llx takes %ld ns\n", cont.cpuid, cont.address, cont.wt );
+			fprintf(stderr,"invalid CPU number is returned from ioctl : %d\n", cont.cpuid );
 		}
+#ifdef OPEN_PER_LOOP
+		close(fd);
+		fd = open( FILENAME, O_RDWR);
+		if( fd < 0 ) perror("device open error");
+#endif
 	}
 
+#if defined (OPEN_PER_THREAD) || defined (OPEN_PER_LOOP)
+	close(fd);
+#endif
+
 	free(userdata);
+
+	printf("[%d] to %lx (pfn= %ld ,%%34= %d ,%%36= %d ,%%38= %d ) takes %ld\n", affi, kaddr, (unsigned long)kaddr/page_size, ((unsigned long)kaddr/64) % 34, ((unsigned long)kaddr/64) % 36, ((unsigned long)kaddr/64) % 38, wts[affi]);
 };
 
+/* usage : ./test <num thread> <cpu number offset> <loop>
+ */
 int main(int argc, char **argv) {
 	int nt = DEF_NUM_THREAD;
+	int cpuoffset = 0;
 	pthread_t *threads;
-	long i;
+	int i;
 
 	if(argc > 1) {
 		nt = atoi(argv[1]);
 	}
 	if(argc > 2) {
-		loop = atoi(argv[2]);
+		cpuoffset = atoi(argv[2]);
+	}
+	if(argc > 3) {
+		loop = atoi(argv[3]);
 	}	
 
-	printf("num threads = %d , loops = %d\n", nt, loop);
+	printf("num threads = %d , offset = %d , loops = %d\n", nt, cpuoffset, loop);
+	page_size = getpagesize();
 
 	threads = (pthread_t *)malloc(nt * sizeof(pthread_t));
 
@@ -102,21 +115,24 @@ int main(int argc, char **argv) {
 		exit(-1);
 	}
 
-	for(i = 0 ; i < nt ;i++) {
-		if(pthread_create(&threads[i], NULL, thread_func, (void *)i ) != 0 )
+	for(i = cpuoffset ; i < nt + cpuoffset ;i++) {
+		if(pthread_create(&threads[i-cpuoffset], NULL, thread_func, (void *)(long)(i%MAX_CORE) ) != 0 )
 			perror("pthread_create");
 	}
 
 	for(i = 0 ; i < nt ;i++) {
 		pthread_join(threads[i], NULL);
+		if( cnts[(i+cpuoffset)%MAX_CORE] == 0 ) printf("!!! affinity error!! cpuid=%d\n",i+cpuoffset );
 	}
 
-	printf("to %lx (pfn = %ld , %d, %d)\n", saddr, (unsigned long)saddr/4096, ((unsigned long)saddr/4096) % 8, (unsigned long)saddr % 36 );
+
+#ifdef PRINT_TIME_PER_CPU
 	for(i = 0 ; i < MAX_CORE;i++) {
 		printf("[%2d]%8ld",i,wts[i],cnts[i]);
 		if(i % 8 == 7) printf("\n");
 		else printf("    ");
 	}
+#endif
 
 	close(sfd);
 	return 0;
