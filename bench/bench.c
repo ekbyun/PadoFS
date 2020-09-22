@@ -15,9 +15,9 @@
 #define NUMA_PREF	1
 #endif
 
-#define ORDER	4
+#define ORDER	10
 #define CLSIZE	64
-#define PROC_WIDTH	( CLSIZE * 1 )
+#define PROC_WIDTH	( CLSIZE * 64 * 16)	//width between each open of the device file
 
 static int maj = 99, min = 0;
 static dev_t bench_dev;
@@ -85,7 +85,7 @@ static long bench_ioctl(struct file *f,unsigned int cmd, unsigned long arg) {
 	for(j=0;j<ORDER;j++) pow *= 2;
 
 	st = ktime_get_ns();
-	for(i=0; i < 2048;i++) {	//iteration on the same address, one cache line. to amplify the result
+	for(i=0; i < 10000;i++) {	//iteration on the same address, one cache line. to amplify the result
 		for(j=0 ; j < 1 ; j++) {	//number of consequent cache lines 
 			offset = ( CLSIZE*( i * 0 + j * 1) + boffset )%(PAGE_SIZE * pow);
 			claddr = virt + offset;
